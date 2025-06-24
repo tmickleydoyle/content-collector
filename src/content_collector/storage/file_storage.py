@@ -61,8 +61,9 @@ class FileStorage:
             body_text = parsed_data.get("body_text", "")
             await self._write_file(paths["body"], body_text)
 
-            headers_text = self._format_headers(parsed_data)
-            await self._write_file(paths["headers"], headers_text)
+            # Save full <head> section HTML for header analysis
+            head_html = parsed_data.get("head_html", "")
+            await self._write_file(paths["headers"], head_html)
 
             metadata_text = self._format_metadata(parsed_data, url)
             await self._write_file(paths["metadata"], metadata_text)
@@ -87,28 +88,6 @@ class FileStorage:
         await loop.run_in_executor(
             None, lambda: file_path.write_text(content, encoding="utf-8")
         )
-
-    def _format_headers(self, parsed_data: Dict) -> str:
-        """Format headers and title information."""
-        lines = []
-
-        if title := parsed_data.get("title"):
-            lines.append(f"TITLE: {title}")
-            lines.append("")
-
-        if meta_desc := parsed_data.get("meta_description"):
-            lines.append(f"META DESCRIPTION: {meta_desc}")
-            lines.append("")
-
-        for level in range(1, 7):
-            headers = parsed_data.get(f"h{level}", [])
-            if headers:
-                lines.append(f"H{level} HEADERS:")
-                for header in headers:
-                    lines.append(f"  - {header}")
-                lines.append("")
-
-        return "\n".join(lines)
 
     def _format_metadata(self, parsed_data: Dict, url: str) -> str:
         """Format metadata information."""

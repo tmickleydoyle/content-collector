@@ -22,11 +22,11 @@ logger = structlog.get_logger()
 class ScrapingEngine:
     """Main scraping engine that coordinates the scraping workflow."""
 
-    def __init__(self) -> None:
+    def __init__(self, debug_links: bool = False) -> None:
         """Initialize scraping engine."""
         self.logger = logger.bind(component="scraping_engine")
         self.input_processor = InputProcessor()
-        self.content_parser = ContentParser()
+        self.content_parser = ContentParser(debug_links=debug_links)
         self.url_validator = URLValidator()
         self._global_visited_urls = set()
         self._url_traversal_paths = {}

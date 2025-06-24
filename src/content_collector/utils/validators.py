@@ -184,7 +184,13 @@ class URLValidator:
         if not domain1 or not domain2:
             return False
 
-        return domain1 == domain2
+        # Treat exact domain or subdomain relationships as same domain
+        if domain1 == domain2:
+            return True
+        # Allow subdomains (e.g., api.example.com vs example.com)
+        if domain2.endswith(f".{domain1}") or domain1.endswith(f".{domain2}"):
+            return True
+        return False
 
     def _is_local_or_ip_address(self, url_or_netloc: str) -> bool:
         """Check if URL or netloc is localhost or IP address."""

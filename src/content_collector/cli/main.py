@@ -78,10 +78,20 @@ def run(
         "--high-performance/--standard",
         help="Use high-performance parallel scraper engine",
     ),
+    enhanced_parsing: bool = typer.Option(
+        False,
+        "--enhanced-parsing/--standard-parsing",
+        help="Use enhanced JavaScript-aware link extraction for SPAs",
+    ),
     max_workers: Optional[int] = typer.Option(
         None,
         "--max-workers",
         help="Maximum number of concurrent workers (high-performance mode only)",
+    ),
+    debug_links: bool = typer.Option(
+        False,
+        "--debug-links",
+        help="Enable debug output for link extraction (shows all found/filtered links)",
     ),
 ):
     """Run the web scraper with the specified parameters."""
@@ -97,6 +107,9 @@ def run(
         f"Cross-domain crawling: {'allowed' if allow_cross_domain else 'same domain only'}"
     )
     console.print(f"Engine: {'High-Performance' if high_performance else 'Standard'}")
+    console.print(
+        f"Parser: {'Enhanced (JS-aware)' if enhanced_parsing else 'Standard'}"
+    )
     if high_performance and max_workers:
         console.print(f"Max workers: {max_workers}")
 
@@ -114,12 +127,14 @@ def run(
                 HighPerformanceScrapingEngine,
             )
 
-            scraper = HighPerformanceScrapingEngine(max_workers=max_workers)
+            scraper = HighPerformanceScrapingEngine(
+                max_workers=max_workers, debug_links=debug_links
+            )
             console.print(
                 "🚀 Using High-Performance Scraping Engine", style="bold green"
             )
         else:
-            scraper = ScrapingEngine()
+            scraper = ScrapingEngine(debug_links=debug_links)
             console.print("⚙️  Using Standard Scraping Engine", style="bold yellow")
 
         try:

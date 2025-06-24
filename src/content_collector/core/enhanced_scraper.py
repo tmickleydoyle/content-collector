@@ -24,11 +24,13 @@ logger = structlog.get_logger()
 class HighPerformanceScrapingEngine:
     """High-performance scraping engine with maximum parallelization."""
 
-    def __init__(self, max_workers: Optional[int] = None) -> None:
+    def __init__(
+        self, max_workers: Optional[int] = None, debug_links: bool = False
+    ) -> None:
         """Initialize enhanced scraping engine."""
         self.logger = logger.bind(component="hp_scraping_engine")
         self.input_processor = InputProcessor()
-        self.content_parser = ContentParser()
+        self.content_parser = ContentParser(debug_links=debug_links)
         self.url_validator = URLValidator()
 
         # Concurrency controls
