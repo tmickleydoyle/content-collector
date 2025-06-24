@@ -134,6 +134,13 @@ run_production*.py
 !test_data/*.csv
 !test_data/*.txt
 
+# Content Collector specific files
+data/
+test_data/content/
+test_data/reports/
+*.db
+*.sqlite3
+
 # IDE
 .vscode/
 .idea/

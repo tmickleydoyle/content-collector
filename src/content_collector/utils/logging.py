@@ -2,24 +2,47 @@
 
 import logging
 import sys
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import structlog
 from structlog.processors import JSONRenderer
 
 
-def setup_logging(debug: bool = False) -> None:
+def setup_logging(
+    level: str = "INFO",
+    debug: bool = False,
+    json_logs: bool = True,
+    file_path: Optional[str] = None,
+    component: Optional[str] = None,
+) -> Any:
     """Setup structured logging with proper configuration."""
-    log_level = logging.DEBUG if debug else logging.INFO
-    
-    # Configure standard library logging
-    logging.basicConfig(
-        format="%(message)s",
-        stream=sys.stdout,
-        level=log_level,
-    )
-    
-    # Configure structlog
+    if debug:
+        log_level = logging.DEBUG
+    else:
+        level_map = {
+            "DEBUG": logging.DEBUG,
+            "INFO": logging.INFO,
+            "WARNING": logging.WARNING,
+            "ERROR": logging.ERROR,
+            "CRITICAL": logging.CRITICAL,
+        }
+        log_level = level_map.get(level.upper(), logging.INFO)
+
+    if file_path:
+        logging.basicConfig(
+            format="%(message)s",
+            filename=file_path,
+            level=log_level,
+        )
+    else:
+        logging.basicConfig(
+            format="%(message)s",
+            stream=sys.stdout,
+            level=log_level,
+        )
+
+    renderer = JSONRenderer() if json_logs else structlog.dev.ConsoleRenderer()
+
     structlog.configure(
         processors=[
             structlog.stdlib.filter_by_level,
@@ -30,10 +53,15 @@ def setup_logging(debug: bool = False) -> None:
             structlog.processors.StackInfoRenderer(),
             structlog.processors.format_exc_info,
             structlog.processors.UnicodeDecoder(),
-            JSONRenderer(),
+            renderer,
         ],
         context_class=dict,
         logger_factory=structlog.stdlib.LoggerFactory(),
         wrapper_class=structlog.stdlib.BoundLogger,
         cache_logger_on_first_use=True,
     )
+
+    logger = structlog.get_logger()
+    if component:
+        logger = logger.bind(component=component)
+    return logger
