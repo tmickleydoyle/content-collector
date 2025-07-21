@@ -9,7 +9,6 @@ A **high-performance, scalable web scraping framework** with advanced concurrenc
 ## ✨ Key Features
 
 ### 🚀 **High-Performance Engine**
-- **30x faster** than traditional scrapers with advanced parallelization
 - **Multi-mode performance optimization** (Conservative → Maximum)
 - **Real-time monitoring** with live statistics and throughput metrics
 - **System-aware scaling** based on CPU cores and available memory
@@ -374,7 +373,3 @@ python -m content_collector turbo input.csv --show-stats --performance balanced
 export CONTENT_COLLECTOR_LOG_LEVEL=DEBUG
 python -m content_collector turbo input.csv --show-stats
 ```
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
