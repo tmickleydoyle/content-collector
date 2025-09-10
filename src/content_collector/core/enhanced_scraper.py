@@ -10,8 +10,8 @@ from typing import Any, Dict, List, Optional, Set
 import structlog
 
 from ..config.settings import settings
+from ..core.content_parser import ContentParser
 from ..core.fetcher import HTTPFetcher
-from ..core.parser import ContentParser
 from ..input.processor import InputProcessor, URLEntry
 from ..storage.database import db_manager
 from ..storage.file_storage import file_storage
@@ -509,7 +509,7 @@ class HighPerformanceScrapingEngine:
             return {}
 
         try:
-            return self.content_parser.parse_html(content, url)
+            return await self.content_parser.parse(content, url)
         except Exception as e:
             self.logger.error("Content parsing failed", url=url, error=str(e))
             return {}

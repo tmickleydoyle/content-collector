@@ -10,6 +10,7 @@ from rich.console import Console
 from rich.table import Table
 
 from content_collector.analytics.reporting import report_generator
+from content_collector.core.content_parser import ContentParser
 from content_collector.core.scraper import ScrapingEngine
 from content_collector.storage.database import db_manager
 
@@ -578,6 +579,591 @@ def turbo(
     if run_id is None:
         raise typer.Exit(1)
     console.print(f"📊 Run ID for status/reports: {run_id}", style="cyan")
+
+
+@app.command()
+def intelligence(
+    url: str = typer.Argument(..., help="URL to analyze with AI-powered intelligence"),
+    save_report: bool = typer.Option(
+        True, "--save-report/--no-save-report", help="Save intelligence report to file"
+    ),
+    show_raw: bool = typer.Option(
+        False, "--show-raw", help="Show raw parsing data along with intelligence"
+    ),
+):
+    """Analyze content with AI-powered intelligence system for deep insights."""
+    console.print("🧠 Content Intelligence Analysis", style="bold blue")
+    console.print(f"Analyzing: {url}")
+
+    async def _analyze():
+        parser = None
+        try:
+            # Enable intelligence analysis
+            parser = ContentParser(enable_intelligence=True)
+
+            console.print("🔍 Parsing and analyzing content...")
+            result = await parser.parse(url, url)
+
+            if not result.get("intelligence"):
+                console.print("❌ Intelligence analysis not available", style="red")
+                return
+
+            intelligence = result["intelligence"]
+
+            # Display content overview
+            console.print(f"\n📄 Content Overview", style="bold green")
+            console.print(f"  Title: {result.get('title', 'N/A')}")
+            console.print(f"  Content: {len(result.get('body_text', ''))} chars")
+            console.print(f"  Links: {result.get('link_count', 0)}")
+
+            # Display intelligence analysis
+            console.print(f"\n🧠 Intelligence Analysis", style="bold cyan")
+
+            # Content Quality
+            quality = intelligence.get("content_quality", {})
+            if quality:
+                console.print(
+                    f"  📊 Quality Score: {quality.get('overall_score', 'N/A')}"
+                )
+                console.print(
+                    f"  📝 Readability: {quality.get('readability_score', 'N/A')}"
+                )
+                console.print(
+                    f"  📏 Content Depth: {quality.get('content_depth', 'N/A')}"
+                )
+                console.print(
+                    f"  🔗 Link Density: {quality.get('link_density', 'N/A')}"
+                )
+
+            # Content Classification
+            classification = intelligence.get("content_classification", {})
+            if classification:
+                console.print(
+                    f"  📂 Category: {classification.get('primary_category', 'N/A')}"
+                )
+                console.print(
+                    f"  🎯 Content Type: {classification.get('content_type', 'N/A')}"
+                )
+                console.print(
+                    f"  👥 Target Audience: {classification.get('audience', 'N/A')}"
+                )
+
+            # Keywords and Topics
+            keywords = intelligence.get("keywords", [])
+            if keywords:
+                console.print(f"  🏷️  Top Keywords: {', '.join(keywords[:10])}")
+
+            topics = intelligence.get("topics", [])
+            if topics:
+                console.print(f"  📋 Topics: {', '.join(topics[:5])}")
+
+            # Technology Stack
+            tech_stack = intelligence.get("technology_stack", {})
+            if tech_stack:
+                frameworks = tech_stack.get("frameworks", [])
+                libraries = tech_stack.get("libraries", [])
+                if frameworks:
+                    console.print(f"  ⚙️  Frameworks: {', '.join(frameworks[:5])}")
+                if libraries:
+                    console.print(f"  📚 Libraries: {', '.join(libraries[:5])}")
+
+            # SEO Analysis
+            seo = intelligence.get("seo_analysis", {})
+            if seo:
+                console.print(f"\n🔍 SEO Analysis", style="bold magenta")
+                console.print(f"  📊 SEO Score: {seo.get('seo_score', 'N/A')}")
+                console.print(
+                    f"  📰 Has Meta Description: {seo.get('has_meta_description', False)}"
+                )
+                console.print(f"  🏷️  H1 Count: {seo.get('h1_count', 0)}")
+                console.print(f"  📝 Title Length: {seo.get('title_length', 0)} chars")
+                console.print(f"  🔗 Internal Links: {seo.get('internal_links', 0)}")
+                console.print(f"  🌐 External Links: {seo.get('external_links', 0)}")
+
+            # Show raw data if requested
+            if show_raw:
+                console.print(f"\n📊 Raw Analysis Data", style="bold yellow")
+                import json
+
+                console.print(json.dumps(intelligence, indent=2, ensure_ascii=False))
+
+            # Save report if requested
+            if save_report:
+                import json
+                from datetime import datetime
+                from pathlib import Path
+
+                output_dir = Path("intelligence_reports")
+                output_dir.mkdir(exist_ok=True)
+
+                # Create filename from URL
+                filename = (
+                    url.replace("https://", "").replace("http://", "").replace("/", "_")
+                )
+                if filename.endswith("_"):
+                    filename = filename[:-1]
+
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                report_file = output_dir / f"{filename}_{timestamp}_intelligence.json"
+
+                # Create comprehensive report
+                report_data = {
+                    "url": url,
+                    "analysis_timestamp": datetime.now().isoformat(),
+                    "content_overview": {
+                        "title": result.get("title"),
+                        "content_length": len(result.get("body_text", "")),
+                        "link_count": result.get("link_count", 0),
+                        "headers_count": sum(
+                            len(h) for h in result.get("headers", {}).values()
+                        ),
+                    },
+                    "intelligence_analysis": intelligence,
+                    "raw_parsing_data": result if show_raw else None,
+                }
+
+                with open(report_file, "w", encoding="utf-8") as f:
+                    json.dump(report_data, f, indent=2, ensure_ascii=False)
+
+                console.print(
+                    f"💾 Intelligence report saved: {report_file.absolute()}",
+                    style="green",
+                )
+
+            console.print(f"\n✅ Intelligence analysis completed!", style="bold green")
+
+        except Exception as e:
+            console.print(f"❌ Analysis failed: {e}", style="red")
+            import traceback
+
+            console.print(traceback.format_exc(), style="red")
+        finally:
+            if parser:
+                await parser.close()
+
+    asyncio.run(_analyze())
+
+
+@app.command()
+def benchmark(
+    mode: str = typer.Option(
+        "comprehensive",
+        "--mode",
+        help="Benchmark mode: parsing, intelligence, full, comprehensive",
+    ),
+    save_results: bool = typer.Option(
+        True, "--save-results/--no-save-results", help="Save benchmark results"
+    ),
+):
+    """Benchmark the content collector's world-class capabilities."""
+    console.print("🏆 Content Collector Benchmark Suite", style="bold blue")
+
+    async def _benchmark():
+        results = {
+            "timestamp": asyncio.get_event_loop().time(),
+            "mode": mode,
+            "tests": [],
+        }
+
+        # Define test sites covering various complexity levels
+        test_sites = [
+            ("Simple HTML", "https://httpbin.org/html"),
+            ("JavaScript Heavy", "https://vercel.com"),
+            ("Content Rich", "https://example.com"),
+        ]
+
+        if mode in ["parsing", "full", "comprehensive"]:
+            console.print("\n📊 Parsing Performance Test", style="bold green")
+
+            for name, url in test_sites:
+                console.print(f"Testing {name}: {url}")
+
+                try:
+                    parser = ContentParser(enable_intelligence=False)
+
+                    start_time = asyncio.get_event_loop().time()
+                    result = await parser.parse(url, url)
+                    end_time = asyncio.get_event_loop().time()
+
+                    parsing_time = end_time - start_time
+
+                    test_result = {
+                        "test_name": f"Parsing - {name}",
+                        "url": url,
+                        "parsing_time": parsing_time,
+                        "content_length": len(result.get("body_text", "")),
+                        "links_found": result.get("link_count", 0),
+                        "success": True,
+                    }
+
+                    console.print(
+                        f"  ✓ Time: {parsing_time:.2f}s | Content: {test_result['content_length']} chars | Links: {test_result['links_found']}"
+                    )
+
+                    await parser.close()
+                    results["tests"].append(test_result)
+
+                except Exception as e:
+                    console.print(f"  ❌ Failed: {e}", style="red")
+                    results["tests"].append(
+                        {
+                            "test_name": f"Parsing - {name}",
+                            "url": url,
+                            "error": str(e),
+                            "success": False,
+                        }
+                    )
+
+        if mode in ["intelligence", "full", "comprehensive"]:
+            console.print("\n🧠 Intelligence Analysis Performance", style="bold cyan")
+
+            for name, url in test_sites[:2]:  # Limit intelligence tests
+                console.print(f"Testing {name}: {url}")
+
+                try:
+                    parser = ContentParser(enable_intelligence=True)
+
+                    start_time = asyncio.get_event_loop().time()
+                    result = await parser.parse(url, url)
+                    end_time = asyncio.get_event_loop().time()
+
+                    total_time = end_time - start_time
+                    intelligence_data = result.get("intelligence", {})
+
+                    test_result = {
+                        "test_name": f"Intelligence - {name}",
+                        "url": url,
+                        "total_time": total_time,
+                        "has_intelligence": bool(intelligence_data),
+                        "intelligence_features": (
+                            len(intelligence_data.keys()) if intelligence_data else 0
+                        ),
+                        "content_length": len(result.get("body_text", "")),
+                        "success": True,
+                    }
+
+                    console.print(
+                        f"  ✓ Time: {total_time:.2f}s | Features: {test_result['intelligence_features']} | Intelligence: {'Yes' if intelligence_data else 'No'}"
+                    )
+
+                    await parser.close()
+                    results["tests"].append(test_result)
+
+                except Exception as e:
+                    console.print(f"  ❌ Failed: {e}", style="red")
+                    results["tests"].append(
+                        {
+                            "test_name": f"Intelligence - {name}",
+                            "url": url,
+                            "error": str(e),
+                            "success": False,
+                        }
+                    )
+
+        if mode == "comprehensive":
+            console.print("\n🚀 Comprehensive Feature Test", style="bold magenta")
+
+            # Test all content types
+            comprehensive_tests = [
+                ("HTML Parsing", "https://httpbin.org/html"),
+                ("JavaScript Rendering", "https://vercel.com"),
+            ]
+
+            for test_name, test_url in comprehensive_tests:
+                console.print(f"Comprehensive test: {test_name}")
+
+                try:
+                    parser = ContentParser(enable_intelligence=True, debug_links=True)
+
+                    start_time = asyncio.get_event_loop().time()
+                    result = await parser.parse(test_url, test_url)
+                    end_time = asyncio.get_event_loop().time()
+
+                    test_result = {
+                        "test_name": f"Comprehensive - {test_name}",
+                        "url": test_url,
+                        "total_time": end_time - start_time,
+                        "features": {
+                            "content_length": len(result.get("body_text", "")),
+                            "links_found": result.get("link_count", 0),
+                            "headers_found": sum(
+                                len(h) for h in result.get("headers", {}).values()
+                            ),
+                            "has_intelligence": bool(result.get("intelligence")),
+                            "has_title": bool(result.get("title")),
+                            "has_meta_description": bool(
+                                result.get("meta_description")
+                            ),
+                            "rendering_method": result.get("rendering_method", "html"),
+                        },
+                        "success": True,
+                    }
+
+                    features = test_result["features"]
+                    console.print(f"  ✓ Time: {test_result['total_time']:.2f}s")
+                    console.print(f"    Content: {features['content_length']} chars")
+                    console.print(f"    Links: {features['links_found']}")
+                    console.print(f"    Method: {features['rendering_method']}")
+                    console.print(
+                        f"    Intelligence: {'Yes' if features['has_intelligence'] else 'No'}"
+                    )
+
+                    await parser.close()
+                    results["tests"].append(test_result)
+
+                except Exception as e:
+                    console.print(f"  ❌ Failed: {e}", style="red")
+                    results["tests"].append(
+                        {
+                            "test_name": f"Comprehensive - {test_name}",
+                            "url": test_url,
+                            "error": str(e),
+                            "success": False,
+                        }
+                    )
+
+        # Calculate summary statistics
+        successful_tests = [t for t in results["tests"] if t.get("success")]
+        failed_tests = [t for t in results["tests"] if not t.get("success")]
+
+        console.print(f"\n📊 Benchmark Summary", style="bold yellow")
+        console.print(f"  Total Tests: {len(results['tests'])}")
+        console.print(f"  Successful: {len(successful_tests)}")
+        console.print(f"  Failed: {len(failed_tests)}")
+
+        if successful_tests:
+            avg_time = sum(
+                t.get("total_time", t.get("parsing_time", 0)) for t in successful_tests
+            ) / len(successful_tests)
+            console.print(f"  Average Time: {avg_time:.2f}s")
+
+            total_content = sum(
+                t.get("features", {}).get("content_length", t.get("content_length", 0))
+                for t in successful_tests
+            )
+            console.print(f"  Total Content: {total_content:,} chars")
+
+        # Save results if requested
+        if save_results:
+            import json
+            from datetime import datetime
+            from pathlib import Path
+
+            output_dir = Path("benchmark_results")
+            output_dir.mkdir(exist_ok=True)
+
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            results_file = output_dir / f"benchmark_{mode}_{timestamp}.json"
+
+            results["summary"] = {
+                "total_tests": len(results["tests"]),
+                "successful_tests": len(successful_tests),
+                "failed_tests": len(failed_tests),
+                "average_time": avg_time if successful_tests else 0,
+                "total_content_processed": total_content if successful_tests else 0,
+            }
+
+            with open(results_file, "w", encoding="utf-8") as f:
+                json.dump(results, f, indent=2, ensure_ascii=False)
+
+            console.print(
+                f"💾 Benchmark results saved: {results_file.absolute()}", style="green"
+            )
+
+        console.print(f"\n✅ Benchmark completed!", style="bold green")
+
+    asyncio.run(_benchmark())
+
+
+@app.command()
+def test_parsing(
+    url: Optional[str] = typer.Option(
+        None, "--url", help="Single URL to test (default: uses built-in test domains)"
+    ),
+    save_files: bool = typer.Option(
+        True, "--save-files/--no-save-files", help="Save results to files"
+    ),
+    save_db: bool = typer.Option(
+        False, "--save-db/--no-save-db", help="Save results to database"
+    ),
+):
+    """Test comprehensive parsing capabilities with automatic content detection."""
+    console.print("🧪 Testing Content Parser", style="bold blue")
+
+    async def _test():
+        parser = None
+        try:
+            # Create comprehensive parser
+            parser = ContentParser(debug_links=True)
+
+            # Determine test URLs
+            test_urls = []
+            if url:
+                test_urls = [url]
+            else:
+                test_urls = [
+                    "https://example.com",  # Simple HTML
+                    "https://httpbin.org/html",  # Test HTML
+                    "https://vercel.com",  # JS-heavy site
+                ]
+
+            console.print(f"Comprehensive parsing enabled (auto-detects content types)")
+            console.print(f"URLs: {len(test_urls)}")
+
+            results = []
+
+            for i, test_url in enumerate(test_urls, 1):
+                console.print(f"\n[{i}/{len(test_urls)}] 🔍 Parsing: {test_url}")
+
+                try:
+                    result = await parser.parse(test_url, test_url)
+
+                    # Display results
+                    console.print(f"  ✓ Title: {result.get('title', 'N/A')[:60]}...")
+                    console.print(
+                        f"  ✓ Content: {len(result.get('body_text', ''))} chars"
+                    )
+                    console.print(f"  ✓ Links: {result.get('link_count', 0)}")
+                    console.print(
+                        f"  ✓ Headers: {sum(len(h) for h in result.get('headers', {}).values())}"
+                    )
+
+                    if "rendering_method" in result:
+                        console.print(f"  ✓ Method: {result['rendering_method']}")
+                    if "ocr_performed" in result:
+                        console.print(
+                            f"  ✓ OCR: {'Yes' if result['ocr_performed'] else 'No'}"
+                        )
+
+                    results.append((test_url, result))
+
+                except Exception as e:
+                    console.print(f"  ❌ Failed: {e}", style="red")
+                    results.append((test_url, None))
+
+            # Save results
+            if save_files or save_db:
+                console.print(f"\n💾 Saving Results...")
+
+                if save_files:
+                    # Create output directory
+                    import json
+                    from pathlib import Path
+
+                    output_dir = Path("test_results")
+                    output_dir.mkdir(exist_ok=True)
+
+                    for test_url, result in results:
+                        if result:
+                            filename = (
+                                test_url.replace("https://", "")
+                                .replace("http://", "")
+                                .replace("/", "_")
+                            )
+                            if filename.endswith("_"):
+                                filename = filename[:-1]
+
+                            # Save JSON
+                            json_file = output_dir / f"{filename}_result.json"
+                            with open(json_file, "w", encoding="utf-8") as f:
+                                json.dump(result, f, indent=2, ensure_ascii=False)
+
+                            # Save content
+                            if result.get("body_text"):
+                                text_file = output_dir / f"{filename}_content.txt"
+                                with open(text_file, "w", encoding="utf-8") as f:
+                                    f.write(f"URL: {test_url}\n")
+                                    f.write(f"Title: {result.get('title', 'N/A')}\n")
+                                    f.write("=" * 50 + "\n\n")
+                                    f.write(result["body_text"])
+
+                    console.print(f"  ✓ Files saved to: {output_dir.absolute()}")
+
+                if save_db:
+                    from content_collector.storage.models import Page, ScrapingRun
+
+                    try:
+                        await db_manager.initialize()
+
+                        async with db_manager.get_session() as session:
+                            # Create run
+                            run = ScrapingRun(
+                                run_id="enhanced_parser_test", status="completed"
+                            )
+                            session.add(run)
+                            await session.commit()
+
+                            # Save pages
+                            for test_url, result in results:
+                                if result:
+                                    page = Page(
+                                        run_id=run.run_id,
+                                        url=test_url,
+                                        title=result.get("title"),
+                                        meta_description=result.get("meta_description"),
+                                        content_length=result.get("content_length", 0),
+                                        link_count=result.get("link_count", 0),
+                                        content_hash=result.get("content_hash"),
+                                        status="completed",
+                                    )
+                                    session.add(page)
+
+                            await session.commit()
+                            console.print(
+                                f"  ✓ Saved to database (run_id: {run.run_id})"
+                            )
+
+                    except Exception as e:
+                        console.print(f"  ❌ Database save failed: {e}", style="red")
+                    finally:
+                        await db_manager.close()
+
+            console.print(f"\n✅ Enhanced parsing test completed!", style="green")
+
+            if results:
+                # Summary table
+                table = Table(title="Parsing Results Summary")
+                table.add_column("URL", style="cyan")
+                table.add_column("Status", style="green")
+                table.add_column("Title", style="white")
+                table.add_column("Content", style="yellow")
+                table.add_column("Links", style="blue")
+
+                for test_url, result in results:
+                    if result:
+                        table.add_row(
+                            test_url[:40] + "..." if len(test_url) > 40 else test_url,
+                            "✓ Success",
+                            (
+                                result.get("title", "N/A")[:30] + "..."
+                                if result.get("title")
+                                and len(result.get("title", "")) > 30
+                                else result.get("title", "N/A")
+                            ),
+                            f"{len(result.get('body_text', ''))} chars",
+                            str(result.get("link_count", 0)),
+                        )
+                    else:
+                        table.add_row(
+                            test_url[:40] + "..." if len(test_url) > 40 else test_url,
+                            "❌ Failed",
+                            "N/A",
+                            "0 chars",
+                            "0",
+                        )
+
+                console.print(table)
+
+        except Exception as e:
+            console.print(f"❌ Test failed: {e}", style="red")
+            import traceback
+
+            console.print(traceback.format_exc(), style="red")
+        finally:
+            if parser:
+                await parser.close()
+
+    asyncio.run(_test())
 
 
 def main(args=None):

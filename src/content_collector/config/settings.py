@@ -41,6 +41,20 @@ class ScrapingSettings(BaseSettings):
     allow_cross_domain: bool = Field(default=False, env="ALLOW_CROSS_DOMAIN")
 
 
+class ParsingSettings(BaseSettings):
+    """Parsing configuration."""
+
+    enable_javascript: bool = Field(default=True, env="ENABLE_JS_PARSING")
+    enable_ocr: bool = Field(default=True, env="ENABLE_OCR")
+    js_timeout: int = Field(default=30000, env="JS_TIMEOUT")
+    js_headless: bool = Field(default=True, env="JS_HEADLESS")
+    ocr_lang: str = Field(default="eng", env="OCR_LANG")
+    ocr_psm: int = Field(default=6, env="OCR_PSM")
+    tesseract_cmd: Optional[str] = Field(default=None, env="TESSERACT_CMD")
+    enable_preprocessing: bool = Field(default=True, env="OCR_PREPROCESSING")
+    parsing_mode: str = Field(default="auto", env="PARSING_MODE")
+
+
 class LoggingSettings(BaseSettings):
     """Logging configuration."""
 
@@ -69,6 +83,7 @@ class Settings(BaseSettings):
 
     database: DatabaseSettings = DatabaseSettings()
     scraping: ScrapingSettings = ScrapingSettings()
+    parsing: ParsingSettings = ParsingSettings()
     storage: StorageSettings = StorageSettings()
     logging: LoggingSettings = LoggingSettings()
 
