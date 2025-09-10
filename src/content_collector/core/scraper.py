@@ -8,8 +8,8 @@ from typing import List, Optional
 import structlog
 
 from ..config.settings import settings
+from ..core.content_parser import ContentParser
 from ..core.fetcher import HTTPFetcher
-from ..core.parser import ContentParser
 from ..input.processor import InputProcessor, URLEntry
 from ..storage.database import db_manager
 from ..storage.file_storage import file_storage
@@ -420,7 +420,7 @@ class ScrapingEngine:
         """Parse content if the fetch was successful."""
         parsed_data = {}
         if status_code == 200 and content:
-            parsed_data = self.content_parser.parse_html(content, url)
+            parsed_data = await self.content_parser.parse(content, url)
         return parsed_data
 
     async def _store_page_result(
