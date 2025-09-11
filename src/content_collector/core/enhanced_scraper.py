@@ -41,6 +41,7 @@ class HighPerformanceScrapingEngine:
 
         # State tracking
         self._global_visited_urls: Set[str] = set()
+        self._global_visited_domains: Set[str] = set()
         self._processing_urls: Set[str] = set()
         self._url_queue: asyncio.Queue = asyncio.Queue()
         self._results_queue: asyncio.Queue = asyncio.Queue()
@@ -268,8 +269,15 @@ class HighPerformanceScrapingEngine:
                 worker_logger.debug("Skipping URL due to loop prevention", url=url)
                 return
 
+            # Check if we should skip this domain
+            if self._should_skip_domain(url):
+                return
+
             # Add to visited URLs
             self._global_visited_urls.add(normalized_url)
+
+            # Mark domain as visited on first URL from this domain
+            self._mark_domain_as_visited(url)
 
             # Get fetcher from pool
             fetcher = self._get_next_fetcher()
@@ -375,6 +383,10 @@ class HighPerformanceScrapingEngine:
             if not settings.scraping.allow_cross_domain:
                 if not self.url_validator.is_same_domain(parent_url, link):
                     continue
+
+            # Check if domain should be skipped
+            if self._should_skip_domain(link):
+                continue
 
             # Check if already visited or being processed
             normalized_link = self.url_validator.normalize_url(link)
@@ -488,6 +500,25 @@ class HighPerformanceScrapingEngine:
             pass
 
         return False
+
+    def _should_skip_domain(self, url: str) -> bool:
+        """Check if domain should be skipped because it was already scraped in this run."""
+        domain = self.url_validator.extract_domain(url)
+        if domain and domain in self._global_visited_domains:
+            self.logger.debug(
+                "Skipping URL due to domain already scraped in this run",
+                url=url,
+                domain=domain,
+            )
+            return True
+        return False
+
+    def _mark_domain_as_visited(self, url: str) -> None:
+        """Mark domain as visited for this scraping run."""
+        domain = self.url_validator.extract_domain(url)
+        if domain:
+            self._global_visited_domains.add(domain)
+            self.logger.debug("Marked domain as visited", domain=domain)
 
     # Reuse existing helper methods from ScrapingEngine
     async def _prepare_url_entries(

@@ -29,6 +29,7 @@ class ScrapingEngine:
         self.content_parser = ContentParser(debug_links=debug_links)
         self.url_validator = URLValidator()
         self._global_visited_urls = set()
+        self._global_visited_domains = set()
         self._url_traversal_paths = {}
 
     async def run(
@@ -184,14 +185,14 @@ class ScrapingEngine:
                 )
 
     async def _scrape_single_url_with_children(
-        self, url_entry: URLEntry, run_id: str, depth: int = 0
-    ) -> List[str]:
-        """Scrape a single URL and return found child URLs."""
+        self, url_entry: URLEntry, run_id: str, depth: int = 0, parent_id: Optional[str] = None, referer_url: Optional[str] = None
+    ) -> tuple[List[str], str]:
+        """Scrape a single URL and return found child URLs and the page_id."""
         semaphore = asyncio.Semaphore(1)
         child_urls = []
+        page_id = str(uuid.uuid4())
 
         async with HTTPFetcher() as fetcher:
-            page_id = str(uuid.uuid4())
             url = str(url_entry.url)
 
             self.logger.debug(
@@ -264,7 +265,7 @@ class ScrapingEngine:
                     )
 
                 await self._store_page_result(
-                    page_id, url, run_id, status_code, parsed_data, headers, depth=depth
+                    page_id, url, run_id, status_code, parsed_data, headers, depth=depth, parent_id=parent_id, referer_url=referer_url
                 )
 
                 self.logger.debug(
@@ -306,14 +307,11 @@ class ScrapingEngine:
                 )
 
                 await self._store_page_result(
-                    page_id, url, run_id, 500, {}, {}, error=str(e), depth=depth
+                    page_id, url, run_id, 500, {}, {}, error=str(e), depth=depth, parent_id=parent_id, referer_url=referer_url
                 )
 
-        return child_urls
+        return child_urls, page_id
 
-    async def _get_page_id_by_url(self, url: str) -> Optional[str]:
-        """Get page ID for a given URL if it exists."""
-        return None
 
     def _would_create_loop(self, candidate_url: str, current_path: List[str]) -> bool:
         """Check if adding candidate URL to path would create a loop."""
@@ -477,6 +475,8 @@ class ScrapingEngine:
         run_id: str,
         max_depth: int = 2,
         current_depth: int = 0,
+        parent_id: Optional[str] = None,
+        referer_url: Optional[str] = None,
     ) -> None:
         """Recursively scrape URLs with depth control."""
         if current_depth >= max_depth:
@@ -485,15 +485,22 @@ class ScrapingEngine:
         for url_entry in url_entries:
             url = str(url_entry.url)
 
-            if self._should_skip_url_for_loop_prevention(url, None, current_depth):
+            if self._should_skip_url_for_loop_prevention(url, referer_url, current_depth):
+                continue
+
+            # Check if we should skip this domain
+            if self._should_skip_domain(url):
                 continue
 
             normalized_url = self.url_validator.normalize_url(url)
             self._global_visited_urls.add(normalized_url)
 
+            # Mark domain as visited on first URL from this domain
+            self._mark_domain_as_visited(url)
+
             try:
-                child_urls = await self._scrape_single_url_with_children(
-                    url_entry, run_id, current_depth
+                child_urls, current_page_id = await self._scrape_single_url_with_children(
+                    url_entry, run_id, current_depth, parent_id, referer_url
                 )
 
                 if child_urls and current_depth + 1 < max_depth:
@@ -510,6 +517,7 @@ class ScrapingEngine:
                         if not self._should_skip_url_for_loop_prevention(
                             child_url, url, current_depth + 1
                         )
+                        and not self._should_skip_domain(child_url)
                     ]
                     filtered_child_count = len(child_entries)
 
@@ -521,8 +529,14 @@ class ScrapingEngine:
                     )
 
                     if filtered_child_count > 0:
+                        # Use the page_id of the current page as parent_id for children
                         await self._scrape_urls_recursive(
-                            child_entries, run_id, max_depth, current_depth + 1
+                            child_entries, 
+                            run_id, 
+                            max_depth, 
+                            current_depth + 1,
+                            parent_id=current_page_id,
+                            referer_url=url
                         )
             except Exception as e:
                 self.logger.debug(f"Mock side effect exhausted or error: {e}")
@@ -560,3 +574,22 @@ class ScrapingEngine:
             pass
 
         return False
+
+    def _should_skip_domain(self, url: str) -> bool:
+        """Check if domain should be skipped because it was already scraped in this run."""
+        domain = self.url_validator.extract_domain(url)
+        if domain and domain in self._global_visited_domains:
+            self.logger.debug(
+                "Skipping URL due to domain already scraped in this run",
+                url=url,
+                domain=domain,
+            )
+            return True
+        return False
+
+    def _mark_domain_as_visited(self, url: str) -> None:
+        """Mark domain as visited for this scraping run."""
+        domain = self.url_validator.extract_domain(url)
+        if domain:
+            self._global_visited_domains.add(domain)
+            self.logger.debug("Marked domain as visited", domain=domain)
