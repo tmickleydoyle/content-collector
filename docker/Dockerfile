@@ -1,4 +1,4 @@
-FROM python:3.10-slim
+FROM python:3.12-slim
 
 # Set the working directory
 WORKDIR /app
@@ -14,4 +14,4 @@ COPY src/ ./src/
 COPY scripts/ ./scripts/
 
 # Set the entry point for the application
-ENTRYPOINT ["python", "./src/content_collector/cli/main.py"]
+ENTRYPOINT ["python", "-m", "content_collector.cli.main"]
