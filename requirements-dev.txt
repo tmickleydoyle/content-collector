@@ -1,13 +1,9 @@
-aiohttp
-httpx
 pytest
-responses
+pytest-asyncio
+pytest-cov
 black
 flake8
 isort
 mypy
-pre-commit
-alembic
-pytest-asyncio
-pytest-cov
-docker-compose
+responses
+httpx
