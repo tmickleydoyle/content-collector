@@ -12,6 +12,7 @@ from rich.table import Table
 from content_collector.analytics.reporting import report_generator
 from content_collector.core.content_parser import ContentParser
 from content_collector.core.scraper import ScrapingEngine
+from content_collector.input.processor import InputProcessor
 from content_collector.storage.database import db_manager
 
 app = typer.Typer(help="Content Collector - Scalable web scraping tool")
@@ -93,6 +94,11 @@ def run(
         False,
         "--debug-links",
         help="Enable debug output for link extraction (shows all found/filtered links)",
+    ),
+    use_sitemaps: bool = typer.Option(
+        False,
+        "--use-sitemaps",
+        help="Discover additional URLs from sitemaps for each domain",
     ),
 ):
     """Run the web scraper with the specified parameters."""
@@ -742,6 +748,190 @@ def intelligence(
                 await parser.close()
 
     asyncio.run(_analyze())
+
+
+@app.command()
+def sitemap(
+    domain: str = typer.Argument(
+        ...,
+        help="Domain to discover URLs from (e.g., example.com or https://example.com)",
+    ),
+    max_urls: Optional[int] = typer.Option(
+        None, "--max-urls", help="Maximum number of URLs to discover"
+    ),
+    use_robots: bool = typer.Option(
+        True, "--use-robots/--no-robots", help="Check robots.txt for sitemap locations"
+    ),
+    output_file: Optional[Path] = typer.Option(
+        None, "--output", "-o", help="Save discovered URLs to CSV file"
+    ),
+    filter_pattern: Optional[str] = typer.Option(
+        None, "--filter", help="Regex pattern to filter URLs"
+    ),
+    exclude_pattern: Optional[str] = typer.Option(
+        None, "--exclude", help="Regex pattern to exclude URLs"
+    ),
+    sort_by: Optional[str] = typer.Option(
+        None, "--sort", help="Sort URLs by: priority, lastmod, or none"
+    ),
+):
+    """Discover URLs from a domain's sitemap for efficient scraping."""
+    console.print("🗺️  Sitemap URL Discovery", style="bold blue")
+    console.print(f"Domain: {domain}")
+
+    async def _discover(save_to_file=output_file):
+        processor = InputProcessor()
+
+        try:
+            # Discover URLs from sitemap
+            urls = await processor.discover_from_sitemap(
+                domain=domain, max_urls=max_urls, use_robots=use_robots
+            )
+
+            # Apply filters if specified
+            if filter_pattern or exclude_pattern:
+                from content_collector.core.sitemap_parser import (
+                    SitemapParser,
+                    SitemapURL,
+                )
+
+                parser = SitemapParser()
+
+                # Convert URLEntry back to SitemapURL for filtering
+                sitemap_urls = []
+                for url_entry in urls:
+                    # Parse description to extract metadata
+                    priority = None
+                    lastmod = None
+                    changefreq = None
+
+                    if url_entry.description:
+                        import re
+                        from datetime import datetime
+
+                        # Extract priority
+                        priority_match = re.search(
+                            r"Priority: ([\d.]+)", url_entry.description
+                        )
+                        if priority_match:
+                            priority = float(priority_match.group(1))
+
+                        # Extract lastmod
+                        lastmod_match = re.search(
+                            r"Modified: ([^\|]+)", url_entry.description
+                        )
+                        if lastmod_match:
+                            try:
+                                lastmod = datetime.fromisoformat(
+                                    lastmod_match.group(1).strip()
+                                )
+                            except:
+                                pass
+
+                        # Extract changefreq
+                        freq_match = re.search(r"Freq: (\w+)", url_entry.description)
+                        if freq_match:
+                            changefreq = freq_match.group(1)
+
+                    sitemap_url = SitemapURL(
+                        loc=str(url_entry.url),
+                        priority=priority,
+                        lastmod=lastmod,
+                        changefreq=changefreq,
+                    )
+                    sitemap_urls.append(sitemap_url)
+
+                # Apply filters
+                if filter_pattern:
+                    sitemap_urls = await parser.filter_by_pattern(
+                        sitemap_urls, [filter_pattern], exclude=False
+                    )
+
+                if exclude_pattern:
+                    sitemap_urls = await parser.filter_by_pattern(
+                        sitemap_urls, [exclude_pattern], exclude=True
+                    )
+
+                # Sort if specified
+                if sort_by == "priority":
+                    sitemap_urls = parser.sort_by_priority(sitemap_urls)
+                elif sort_by == "lastmod":
+                    sitemap_urls = parser.sort_by_lastmod(sitemap_urls)
+
+                # Convert back to URLEntry
+                urls = []
+                for sitemap_url in sitemap_urls:
+                    from content_collector.input.processor import URLEntry
+
+                    description_parts = []
+                    if sitemap_url.lastmod:
+                        description_parts.append(
+                            f"Modified: {sitemap_url.lastmod.isoformat()}"
+                        )
+                    if sitemap_url.priority is not None:
+                        description_parts.append(f"Priority: {sitemap_url.priority}")
+                    if sitemap_url.changefreq:
+                        description_parts.append(f"Freq: {sitemap_url.changefreq}")
+
+                    description = (
+                        " | ".join(description_parts) if description_parts else ""
+                    )
+
+                    url_entry = URLEntry(
+                        url=str(sitemap_url.loc), description=description
+                    )
+                    urls.append(url_entry)
+
+            # Display results
+            console.print(
+                f"\n✅ Discovered {len(urls)} URLs from sitemap", style="green"
+            )
+
+            if urls:
+                # Show sample of URLs
+                console.print("\n📋 Sample URLs (first 10):", style="bold")
+                for i, url_entry in enumerate(urls[:10], 1):
+                    console.print(f"  {i}. {url_entry.url}")
+                    if url_entry.description:
+                        console.print(f"     {url_entry.description}", style="dim")
+
+                if len(urls) > 10:
+                    console.print(f"  ... and {len(urls) - 10} more URLs", style="dim")
+
+            # Save to file if specified
+            if save_to_file and urls:
+                import csv
+
+                save_path = Path(save_to_file)
+                with open(save_path, "w", newline="", encoding="utf-8") as f:
+                    writer = csv.writer(f)
+                    writer.writerow(["url", "description"])
+
+                    for url_entry in urls:
+                        writer.writerow([str(url_entry.url), url_entry.description])
+
+                console.print(
+                    f"\n💾 URLs saved to: {save_path.absolute()}", style="green"
+                )
+
+            return urls
+
+        except Exception as e:
+            console.print(f"❌ Sitemap discovery failed: {e}", style="red")
+            import traceback
+
+            console.print(traceback.format_exc(), style="dim red")
+            return []
+
+    urls = asyncio.run(_discover())
+
+    if not urls:
+        console.print("\n⚠️  No URLs discovered from sitemap", style="yellow")
+        console.print("Tips:", style="bold")
+        console.print("  • Check if the domain has a sitemap.xml")
+        console.print("  • Verify robots.txt contains Sitemap directives")
+        console.print("  • Try without --no-robots flag")
+        raise typer.Exit(1)
 
 
 @app.command()
