@@ -29,16 +29,35 @@ class DatabaseSettings(BaseSettings):
 class ScrapingSettings(BaseSettings):
     """Scraping configuration."""
 
+    # Performance settings
+    performance_mode: str = Field(
+        default="balanced", env="PERFORMANCE_MODE"
+    )  # conservative, balanced, aggressive
+    max_workers: Optional[int] = Field(
+        default=None, env="MAX_WORKERS"
+    )  # Auto-calculated if None
     max_concurrent_requests: int = Field(default=10, env="MAX_CONCURRENT_REQUESTS")
+
+    # HTTP settings
     request_timeout: int = Field(default=30, env="REQUEST_TIMEOUT")
     max_retries: int = Field(default=3, env="MAX_RETRIES")
     retry_delay: float = Field(default=1.0, env="RETRY_DELAY")
-    max_depth: int = Field(default=3, env="MAX_DEPTH")
     rate_limit_delay: float = Field(default=1.0, env="RATE_LIMIT_DELAY")
     user_agent: str = Field(default="ContentCollector/0.1.0", env="USER_AGENT")
+
+    # Crawling settings
+    max_depth: int = Field(default=3, env="MAX_DEPTH")
     enable_loop_prevention: bool = Field(default=True, env="ENABLE_LOOP_PREVENTION")
     enable_pattern_detection: bool = Field(default=True, env="ENABLE_PATTERN_DETECTION")
     allow_cross_domain: bool = Field(default=False, env="ALLOW_CROSS_DOMAIN")
+
+    # Connection settings
+    max_connections: Optional[int] = Field(default=None, env="MAX_CONNECTIONS")
+    max_connections_per_host: Optional[int] = Field(
+        default=None, env="MAX_CONNECTIONS_PER_HOST"
+    )
+    enable_dns_cache: bool = Field(default=True, env="ENABLE_DNS_CACHE")
+    enable_keepalive: bool = Field(default=True, env="ENABLE_KEEPALIVE")
 
 
 class ParsingSettings(BaseSettings):

@@ -1,15 +1,17 @@
-"""Main scraping engine that orchestrates the scraping process."""
+"""Enhanced scraping engine with maximum parallelization."""
 
 import asyncio
+import time
 import uuid
+from collections import defaultdict, deque
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 import structlog
 
 from ..config.settings import settings
 from ..core.content_parser import ContentParser
-from ..core.fetcher import HTTPFetcher
+from ..core.fetcher import HighPerformanceFetcher
 from ..input.processor import InputProcessor, URLEntry
 from ..storage.database import db_manager
 from ..storage.file_storage import file_storage
@@ -20,23 +22,52 @@ logger = structlog.get_logger()
 
 
 class ScrapingEngine:
-    """Main scraping engine that coordinates the scraping workflow."""
+    """High-performance scraping engine with maximum parallelization."""
 
-    def __init__(self, debug_links: bool = False) -> None:
-        """Initialize scraping engine."""
-        self.logger = logger.bind(component="scraping_engine")
+    def __init__(
+        self, max_workers: Optional[int] = None, debug_links: bool = False
+    ) -> None:
+        """Initialize enhanced scraping engine."""
+        self.logger = logger.bind(component="hp_scraping_engine")
         self.input_processor = InputProcessor()
         self.content_parser = ContentParser(debug_links=debug_links)
         self.url_validator = URLValidator()
-        self._global_visited_urls = set()
-        self._global_visited_domains = set()
-        self._url_traversal_paths = {}
+
+        # Concurrency controls
+        self.max_workers = max_workers or (
+            settings.scraping.max_concurrent_requests * 2
+        )
+        self.semaphore = asyncio.Semaphore(self.max_workers)
+
+        # State tracking
+        self._global_visited_urls: Set[str] = set()
+        self._processing_urls: Set[str] = set()
+        self._url_queue: asyncio.Queue = asyncio.Queue()
+        self._results_queue: asyncio.Queue = asyncio.Queue()
+
+        # Max pages limit for the entire run
+        self._max_pages_limit: Optional[int] = None
+        self._total_urls_queued: int = 0
+
+        # Performance metrics
+        self._stats = {
+            "urls_processed": 0,
+            "urls_failed": 0,
+            "total_processing_time": 0,
+            "concurrent_workers": 0,
+            "queue_size": 0,
+        }
+
+        # Multiple HTTP fetchers for better connection pooling
+        self._fetcher_pool_size = min(5, max(1, self.max_workers // 10))
+        self._fetcher_pool: List[HighPerformanceFetcher] = []
+        self._fetcher_index = 0
 
     async def run(
         self, input_file: Path, max_pages: Optional[int] = None, max_depth: int = 2
     ) -> str:
         """
-        Run the complete scraping workflow.
+        Run high-performance scraping workflow.
 
         Args:
             input_file: Path to input file containing CSV paths
@@ -48,16 +79,27 @@ class ScrapingEngine:
         """
         run_id = str(uuid.uuid4())
 
+        # Set max pages limit for this run
+        self._max_pages_limit = max_pages
+        self._total_urls_queued = 0
+
         self.logger.info(
-            "Starting scraping run",
+            "Starting high-performance scraping run",
             run_id=run_id,
             input_file=str(input_file),
             max_pages=max_pages,
+            max_depth=max_depth,
+            max_workers=self.max_workers,
+            fetcher_pool_size=self._fetcher_pool_size,
         )
 
         await self._create_scraping_run_record(run_id, str(input_file), max_depth)
 
         try:
+            # Initialize fetcher pool
+            await self._initialize_fetcher_pool()
+
+            # Prepare initial URLs
             url_entries = await self._prepare_url_entries(input_file, max_pages)
 
             if not url_entries:
@@ -66,305 +108,444 @@ class ScrapingEngine:
 
             await self._update_total_urls_count(run_id, len(url_entries))
 
-            await self._scrape_urls_recursive(url_entries, run_id, max_depth)
+            # Start parallel processing
+            await self._parallel_scrape_with_depth(url_entries, run_id, max_depth)
 
             await self._mark_run_completed(run_id)
 
-            self.logger.info("Scraping run completed", run_id=run_id)
+            self.logger.info(
+                "High-performance scraping run completed",
+                run_id=run_id,
+                stats=self._stats,
+            )
 
         except Exception as e:
             self.logger.error("Scraping run failed", run_id=run_id, error=str(e))
-
             await self._mark_run_failed(run_id, str(e))
-
             raise
+        finally:
+            await self._cleanup_fetcher_pool()
 
         return run_id
 
-    async def _scrape_urls(self, url_entries: List[URLEntry], run_id: str) -> None:
-        """Scrape list of URLs with concurrency control."""
-        semaphore = asyncio.Semaphore(settings.scraping.max_concurrent_requests)
+    async def _initialize_fetcher_pool(self) -> None:
+        """Initialize pool of HTTP fetchers for better connection distribution."""
+        self._fetcher_pool = []
+        for i in range(self._fetcher_pool_size):
+            fetcher = HighPerformanceFetcher()
+            await fetcher.start_session()
+            self._fetcher_pool.append(fetcher)
 
-        async with HTTPFetcher() as fetcher:
-            tasks = []
-            for url_entry in url_entries:
-                task = self._scrape_single_url(fetcher, url_entry, run_id, semaphore)
-                tasks.append(task)
+        self.logger.info(
+            f"Initialized fetcher pool with {len(self._fetcher_pool)} fetchers"
+        )
 
-            self.logger.info(f"Starting to scrape {len(tasks)} URLs")
-            await asyncio.gather(*tasks, return_exceptions=True)
-
-    async def _scrape_single_url(
-        self,
-        fetcher: HTTPFetcher,
-        url_entry: URLEntry,
-        run_id: str,
-        semaphore: asyncio.Semaphore,
-    ) -> None:
-        """Scrape a single URL and store results."""
-        async with semaphore:
-            page_id = str(uuid.uuid4())
-            url = str(url_entry.url)
-
-            self.logger.debug("Scraping URL", url=url, page_id=page_id)
-
+    async def _cleanup_fetcher_pool(self) -> None:
+        """Clean up HTTP fetcher pool."""
+        for fetcher in self._fetcher_pool:
             try:
-                status_code, content, headers = await fetcher.fetch(url)
-
-                self.logger.debug(
-                    "Fetch completed",
-                    url=url,
-                    status_code=status_code,
-                    content_type=type(content).__name__,
-                )
-
-                parsed_data = await self._parse_content_if_successful(
-                    status_code, content, url
-                )
-
-                self.logger.debug(
-                    "Parse completed",
-                    url=url,
-                    parsed_data_type=type(parsed_data).__name__,
-                )
-
-                if not isinstance(parsed_data, dict):
-                    self.logger.warning(
-                        "parsed_data is not dict",
-                        url=url,
-                        parsed_data_type=type(parsed_data).__name__,
-                        parsed_data=str(parsed_data)[:100],
-                    )
-                    parsed_data = {}
-
-                await self._store_page_result(
-                    page_id, url, run_id, status_code, parsed_data, headers
-                )
-
-                self.logger.debug(
-                    "Store completed",
-                    url=url,
-                    parsed_data_type=type(parsed_data).__name__,
-                )
-
-                if status_code == 200 and content:
-                    self.logger.debug(
-                        "About to save content",
-                        url=url,
-                        parsed_data_type=type(parsed_data).__name__,
-                    )
-                    await file_storage.save_content(
-                        content_id=page_id,
-                        content=content,
-                        parsed_data=parsed_data,
-                        url=url,
-                    )
-                    self.logger.debug(
-                        "Content saved",
-                        url=url,
-                        parsed_data_type=type(parsed_data).__name__,
-                    )
-
-                self.logger.debug(
-                    "About to log success",
-                    url=url,
-                    parsed_data_type=type(parsed_data).__name__,
-                )
-                self.logger.info(
-                    "URL scraped successfully",
-                    url=url,
-                    status_code=status_code,
-                    title=parsed_data.get("title", "No title"),
-                )
-
+                await fetcher.close_session()
             except Exception as e:
-                self.logger.error("Failed to scrape URL", url=url, error=str(e))
+                self.logger.warning(f"Error closing fetcher session: {e}")
+        self._fetcher_pool.clear()
 
-                await self._store_page_result(
-                    page_id, url, run_id, 500, {}, {}, error=str(e)
-                )
+    def _get_next_fetcher(self) -> HighPerformanceFetcher:
+        """Get next fetcher from pool using round-robin."""
+        fetcher = self._fetcher_pool[self._fetcher_index]
+        self._fetcher_index = (self._fetcher_index + 1) % len(self._fetcher_pool)
+        return fetcher
 
-    async def _scrape_single_url_with_children(
-        self, url_entry: URLEntry, run_id: str, depth: int = 0, parent_id: Optional[str] = None, referer_url: Optional[str] = None
-    ) -> tuple[List[str], str]:
-        """Scrape a single URL and return found child URLs and the page_id."""
-        semaphore = asyncio.Semaphore(1)
-        child_urls = []
-        page_id = str(uuid.uuid4())
+    async def _parallel_scrape_with_depth(
+        self, initial_urls: List[URLEntry], run_id: str, max_depth: int
+    ) -> None:
+        """
+        Parallel scraping with depth control using producer-consumer pattern.
+        """
+        # Initialize URL queue with initial URLs
+        for url_entry in initial_urls:
+            self._total_urls_queued += 1
+            await self._url_queue.put(
+                (url_entry, 0, None)
+            )  # (url_entry, depth, parent_id)
 
-        async with HTTPFetcher() as fetcher:
-            url = str(url_entry.url)
+        # Start worker tasks
+        workers = []
+        for i in range(self.max_workers):
+            worker = asyncio.create_task(self._worker(run_id, max_depth, worker_id=i))
+            workers.append(worker)
 
-            self.logger.debug(
-                "Scraping URL with children", url=url, page_id=page_id, depth=depth
+        # Start result processor
+        result_processor = asyncio.create_task(self._result_processor(run_id))
+
+        # Start stats reporter
+        stats_reporter = asyncio.create_task(self._stats_reporter())
+
+        try:
+            # Wait for queue to be empty and all workers to finish
+            await self._url_queue.join()
+
+            # Cancel workers
+            for worker in workers:
+                worker.cancel()
+
+            # Wait for remaining results to be processed
+            await self._results_queue.join()
+
+            # Cancel result processor and stats reporter
+            result_processor.cancel()
+            stats_reporter.cancel()
+
+            # Wait for cancellation to complete
+            await asyncio.gather(
+                *workers, result_processor, stats_reporter, return_exceptions=True
             )
 
+        except Exception as e:
+            self.logger.error("Error in parallel scraping", error=str(e))
+            raise
+
+    async def _worker(self, run_id: str, max_depth: int, worker_id: int) -> None:
+        """
+        Worker task that processes URLs from the queue.
+        """
+        worker_logger = self.logger.bind(worker_id=worker_id)
+
+        try:
+            while True:
+                try:
+                    # Get URL from queue with timeout
+                    url_entry, depth, parent_id = await asyncio.wait_for(
+                        self._url_queue.get(), timeout=5.0
+                    )
+
+                    async with self.semaphore:
+                        self._stats["concurrent_workers"] += 1
+
+                        try:
+                            await self._process_single_url(
+                                url_entry,
+                                run_id,
+                                depth,
+                                max_depth,
+                                worker_logger,
+                                parent_id,
+                            )
+                        finally:
+                            self._stats["concurrent_workers"] -= 1
+                            self._url_queue.task_done()
+
+                except asyncio.TimeoutError:
+                    # No more URLs in queue, worker can exit
+                    break
+                except Exception as e:
+                    worker_logger.error("Worker error", error=str(e))
+                    self._url_queue.task_done()
+
+        except asyncio.CancelledError:
+            worker_logger.debug("Worker cancelled")
+            raise
+
+    async def _process_single_url(
+        self,
+        url_entry: URLEntry,
+        run_id: str,
+        depth: int,
+        max_depth: int,
+        worker_logger: Any,
+        parent_id: Optional[str] = None,
+    ) -> None:
+        """Process a single URL and add discovered children to queue."""
+        url = str(url_entry.url)
+
+        # Check if already processed
+        normalized_url = self.url_validator.normalize_url(url)
+        if normalized_url in self._global_visited_urls:
+            return
+
+        # Check if currently being processed
+        if normalized_url in self._processing_urls:
+            return
+
+        # Mark as being processed AND visited immediately to prevent duplicates
+        self._processing_urls.add(normalized_url)
+        self._global_visited_urls.add(normalized_url)
+
+        try:
+            start_time = time.time()
+
+            # Check loop prevention
+            if self._should_skip_url_for_loop_prevention(url, None, depth):
+                worker_logger.debug("Skipping URL due to loop prevention", url=url)
+                # Remove from visited since we're not actually processing it
+                self._global_visited_urls.discard(normalized_url)
+                return
+
+            # Note: Removed domain filtering as it was preventing legitimate crawling
+
+            # Get fetcher from pool
+            fetcher = self._get_next_fetcher()
+
+            # Scrape URL
+            page_id = str(uuid.uuid4())
+
+            worker_logger.debug("Processing URL", url=url, depth=depth, page_id=page_id)
+
             try:
                 status_code, content, headers = await fetcher.fetch(url)
-
-                self.logger.debug(
-                    "Fetch completed",
-                    url=url,
-                    status_code=status_code,
-                    content_type=type(content).__name__,
-                )
 
                 parsed_data = await self._parse_content_if_successful(
                     status_code, content, url
                 )
 
-                self.logger.debug(
-                    "Parse completed",
-                    url=url,
-                    parsed_data_type=type(parsed_data).__name__,
+                # Store result
+                await self._results_queue.put(
+                    {
+                        "type": "page_result",
+                        "page_id": page_id,
+                        "url": url,
+                        "run_id": run_id,
+                        "status_code": status_code,
+                        "parsed_data": parsed_data,
+                        "headers": headers,
+                        "depth": depth,
+                        "parent_id": parent_id,
+                        "content": content if status_code == 200 else None,
+                    }
                 )
 
-                if not isinstance(parsed_data, dict):
-                    self.logger.warning(
-                        "parsed_data is not dict",
-                        url=url,
-                        parsed_data_type=type(parsed_data).__name__,
-                        parsed_data=str(parsed_data)[:100],
-                    )
-                    parsed_data = {}
+                # Extract child URLs if successful and within depth limit
+                if (
+                    status_code == 200
+                    and isinstance(parsed_data, dict)
+                    and depth < max_depth
+                    and parsed_data.get("links")
+                ):
 
-                if status_code == 200 and content and "links" in parsed_data:
-                    all_links = parsed_data["links"]
+                    child_urls = self._filter_child_urls(parsed_data["links"], url)
 
-                    for link in all_links:
-                        if link == url:
-                            continue
+                    # Add child URLs to queue for processing (with max pages check)
+                    for child_url in child_urls:
+                        # Check if we've reached the max pages limit
+                        if (
+                            self._max_pages_limit
+                            and self._total_urls_queued >= self._max_pages_limit
+                        ):
+                            worker_logger.debug(
+                                "Max pages limit reached, not queueing more URLs",
+                                max_pages=self._max_pages_limit,
+                                total_queued=self._total_urls_queued,
+                            )
+                            break
 
-                        if not self.url_validator.is_valid_url(link):
-                            continue
+                        child_entry = URLEntry(
+                            url=child_url, priority=1, category="discovered"
+                        )
+                        self._total_urls_queued += 1
+                        await self._url_queue.put((child_entry, depth + 1, page_id))
 
-                        if not settings.scraping.allow_cross_domain:
-                            if not self.url_validator.is_same_domain(url, link):
-                                self.logger.debug(
-                                    "Skipping cross-domain URL",
-                                    current_url=url,
-                                    child_url=link,
-                                    current_domain=self.url_validator.extract_domain(
-                                        url
-                                    ),
-                                    child_domain=self.url_validator.extract_domain(
-                                        link
-                                    ),
-                                )
-                                continue
-
-                        child_urls.append(link)
-
-                    self.logger.debug(
-                        "Extracted child URLs",
+                    worker_logger.debug(
+                        "Added child URLs to queue",
                         url=url,
                         child_count=len(child_urls),
-                        depth=depth,
-                        total_links=len(all_links),
-                        cross_domain_allowed=settings.scraping.allow_cross_domain,
+                        current_depth=depth,
                     )
 
-                await self._store_page_result(
-                    page_id, url, run_id, status_code, parsed_data, headers, depth=depth, parent_id=parent_id, referer_url=referer_url
-                )
+                processing_time = time.time() - start_time
+                self._stats["total_processing_time"] += processing_time
+                self._stats["urls_processed"] += 1
 
-                self.logger.debug(
-                    "Store completed",
-                    url=url,
-                    parsed_data_type=type(parsed_data).__name__,
-                )
-
-                if status_code == 200 and content:
-                    self.logger.debug(
-                        "About to save content",
-                        url=url,
-                        parsed_data_type=type(parsed_data).__name__,
-                    )
-                    await file_storage.save_content(
-                        content_id=page_id,
-                        content=content,
-                        parsed_data=parsed_data,
-                        url=url,
-                    )
-                    self.logger.debug(
-                        "Content saved",
-                        url=url,
-                        parsed_data_type=type(parsed_data).__name__,
-                    )
-
-                self.logger.info(
-                    "URL scraped successfully",
+                worker_logger.info(
+                    "URL processed successfully",
                     url=url,
                     status_code=status_code,
-                    title=parsed_data.get("title", "No title"),
-                    child_urls_found=len(child_urls),
+                    processing_time=processing_time,
                     depth=depth,
                 )
 
             except Exception as e:
-                self.logger.error(
-                    "Failed to scrape URL", url=url, error=str(e), depth=depth
+                # Store failed result
+                await self._results_queue.put(
+                    {
+                        "type": "page_result",
+                        "page_id": page_id,
+                        "url": url,
+                        "run_id": run_id,
+                        "status_code": 500,
+                        "parsed_data": {},
+                        "headers": {},
+                        "depth": depth,
+                        "error": str(e),
+                        "parent_id": parent_id,
+                        "content": None,
+                    }
                 )
 
-                await self._store_page_result(
-                    page_id, url, run_id, 500, {}, {}, error=str(e), depth=depth, parent_id=parent_id, referer_url=referer_url
+                self._stats["urls_failed"] += 1
+                worker_logger.error("Failed to process URL", url=url, error=str(e))
+
+        finally:
+            # Remove from processing set
+            self._processing_urls.discard(normalized_url)
+
+    def _filter_child_urls(self, links: List[str], parent_url: str) -> List[str]:
+        """Filter child URLs based on domain policy and validation."""
+        filtered_urls = []
+
+        for link in links:
+            if not self.url_validator.is_valid_url(link):
+                continue
+
+            # Apply cross-domain filtering
+            if not settings.scraping.allow_cross_domain:
+                if not self.url_validator.is_same_domain(parent_url, link):
+                    continue
+
+            # Note: Domain filtering removed - rely on URL deduplication instead
+
+            # Check if already visited or being processed
+            normalized_link = self.url_validator.normalize_url(link)
+            if (
+                normalized_link not in self._global_visited_urls
+                and normalized_link not in self._processing_urls
+            ):
+                filtered_urls.append(link)
+
+        return filtered_urls
+
+    async def _result_processor(self, run_id: str) -> None:
+        """Process results from the results queue."""
+        try:
+            while True:
+                try:
+                    result = await asyncio.wait_for(
+                        self._results_queue.get(), timeout=10.0
+                    )
+
+                    if result["type"] == "page_result":
+                        await self._store_page_result(
+                            result["page_id"],
+                            result["url"],
+                            result["run_id"],
+                            result["status_code"],
+                            result["parsed_data"],
+                            result["headers"],
+                            referer_url=None,
+                            depth=result["depth"],
+                            parent_id=result.get("parent_id"),
+                            error=result.get("error"),
+                            content=result.get("content"),
+                        )
+
+                        # Save content if successful
+                        if result["content"] and result["status_code"] == 200:
+                            await file_storage.save_content(
+                                content_id=result["page_id"],
+                                content=result["content"],
+                                parsed_data=result["parsed_data"],
+                                url=result["url"],
+                            )
+
+                    self._results_queue.task_done()
+
+                except asyncio.TimeoutError:
+                    # No more results, can exit
+                    break
+                except Exception as e:
+                    self.logger.error("Error processing result", error=str(e))
+                    self._results_queue.task_done()
+
+        except asyncio.CancelledError:
+            self.logger.debug("Result processor cancelled")
+            raise
+
+    async def _stats_reporter(self) -> None:
+        """Periodically report processing statistics."""
+        try:
+            while True:
+                await asyncio.sleep(30)  # Report every 30 seconds
+
+                self._stats["queue_size"] = self._url_queue.qsize()
+
+                avg_processing_time = self._stats["total_processing_time"] / max(
+                    1, self._stats["urls_processed"]
                 )
 
-        return child_urls, page_id
+                self.logger.info(
+                    "Processing statistics",
+                    urls_processed=self._stats["urls_processed"],
+                    urls_failed=self._stats["urls_failed"],
+                    concurrent_workers=self._stats["concurrent_workers"],
+                    queue_size=self._stats["queue_size"],
+                    avg_processing_time=f"{avg_processing_time:.2f}s",
+                    visited_urls=len(self._global_visited_urls),
+                )
 
+        except asyncio.CancelledError:
+            self.logger.debug("Stats reporter cancelled")
+            raise
 
-    def _would_create_loop(self, candidate_url: str, current_path: List[str]) -> bool:
-        """Check if adding candidate URL to path would create a loop."""
-        return candidate_url in current_path
+    def _should_skip_url_for_loop_prevention(
+        self, url: str, referer_url: Optional[str] = None, depth: int = 0
+    ) -> bool:
+        """Check if URL should be skipped for loop prevention."""
+        if not settings.scraping.enable_loop_prevention:
+            return False
 
-    def _is_potential_infinite_loop_pair(self, url1: str, url2: str) -> bool:
-        """Check if two URLs might create an infinite loop."""
+        # Note: Don't check _global_visited_urls here as it's already checked in _process_single_url
+        # This function only checks for path-based loops
+
+        # Path-based loop detection
         try:
             from urllib.parse import urlparse
 
-            parsed1 = urlparse(url1)
-            parsed2 = urlparse(url2)
+            parsed = urlparse(url)
+            path_parts = parsed.path.strip("/").split("/")
 
-            if url1 == url2:
-                return True
+            if len(path_parts) > 1:
+                from collections import Counter
 
-            if parsed1.netloc != parsed2.netloc:
-                return False
-
-            path1 = parsed1.path.rstrip("/")
-            path2 = parsed2.path.rstrip("/")
-
-            if path1 and path2:
-                if path1.startswith(path2) or path2.startswith(path1):
-                    return True
-
-            return False
+                segment_counts = Counter(path_parts)
+                for segment, count in segment_counts.items():
+                    if segment and count > 2:
+                        return True
         except Exception:
-            return url1 == url2
+            pass
 
-    def _build_traversal_path(
-        self, url: str, referer: Optional[str] = None
-    ) -> List[str]:
-        """Build traversal path for loop detection."""
-        path = []
-        if referer:
-            path.append(referer)
-        path.append(url)
+        return False
 
-        self._url_traversal_paths[url] = path
-        return path
+    # Reuse existing helper methods from ScrapingEngine
+    async def _prepare_url_entries(
+        self, input_file: Path, max_pages: Optional[int]
+    ) -> List[URLEntry]:
+        """Prepare URL entries from input file."""
+        url_entries = await self.input_processor.process_input_file(input_file)
+
+        if max_pages and len(url_entries) > max_pages:
+            url_entries = url_entries[:max_pages]
+
+        return url_entries
+
+    async def _parse_content_if_successful(
+        self, status_code: int, content: str, url: str
+    ) -> Dict:
+        """Parse content if request was successful."""
+        if status_code != 200 or not content:
+            return {}
+
+        try:
+            return await self.content_parser.parse(content, url)
+        except Exception as e:
+            self.logger.error("Content parsing failed", url=url, error=str(e))
+            return {}
 
     async def _create_scraping_run_record(
-        self, run_id: str, input_file: str, max_depth: int = None
+        self, run_id: str, input_file: str, max_depth: int
     ) -> None:
         """Create a scraping run record in the database."""
-        if max_depth is None:
-            max_depth = settings.scraping.max_depth
-
         async with db_manager.session() as session:
             scraping_run = ScrapingRun(
                 id=run_id,
-                input_file=str(input_file),
+                input_file=input_file,
                 max_depth=max_depth,
                 total_urls=0,
                 status="running",
@@ -372,54 +553,30 @@ class ScrapingEngine:
             session.add(scraping_run)
             await session.commit()
 
-    async def _prepare_url_entries(
-        self, input_file: Path, max_pages: Optional[int] = None
-    ) -> List[URLEntry]:
-        """Prepare URL entries from input file."""
-        url_entries = await self.input_processor.process_input_file(input_file)
-
-        if not url_entries:
-            self.logger.warning("No URLs found in input file")
-            return []
-
-        if max_pages and len(url_entries) > max_pages:
-            url_entries = url_entries[:max_pages]
-
-        return url_entries
-
-    async def _update_total_urls_count(self, run_id: str, total_count: int) -> None:
-        """Update the total URLs count for a scraping run."""
+    async def _update_total_urls_count(self, run_id: str, total_urls: int) -> None:
+        """Update total URLs count in scraping run."""
         async with db_manager.session() as session:
-            result = await session.get(ScrapingRun, run_id)
-            if result:
-                result.total_urls = total_count
+            scraping_run = await session.get(ScrapingRun, run_id)
+            if scraping_run:
+                scraping_run.total_urls = total_urls
                 await session.commit()
 
     async def _mark_run_completed(self, run_id: str) -> None:
-        """Mark a scraping run as completed."""
+        """Mark scraping run as completed."""
         async with db_manager.session() as session:
-            result = await session.get(ScrapingRun, run_id)
-            if result:
-                result.status = "completed"
+            scraping_run = await session.get(ScrapingRun, run_id)
+            if scraping_run:
+                scraping_run.status = "completed"
                 await session.commit()
 
     async def _mark_run_failed(self, run_id: str, error_message: str) -> None:
-        """Mark a scraping run as failed."""
+        """Mark scraping run as failed."""
         async with db_manager.session() as session:
-            result = await session.get(ScrapingRun, run_id)
-            if result:
-                result.status = "failed"
-                result.error_message = error_message
+            scraping_run = await session.get(ScrapingRun, run_id)
+            if scraping_run:
+                scraping_run.status = "failed"
+                scraping_run.error_message = error_message
                 await session.commit()
-
-    async def _parse_content_if_successful(
-        self, status_code: int, content: str, url: str
-    ) -> dict:
-        """Parse content if the fetch was successful."""
-        parsed_data = {}
-        if status_code == 200 and content:
-            parsed_data = await self.content_parser.parse(content, url)
-        return parsed_data
 
     async def _store_page_result(
         self,
@@ -441,155 +598,32 @@ class ScrapingEngine:
         if headers is None:
             headers = {}
 
-        domain = self.url_validator.extract_domain(url)
-
-        async with db_manager.session() as session:
-            page = Page(
-                id=page_id,
-                url=url,
-                domain=domain or "unknown",
-                status_code=status_code,
-                depth=depth,
-                content_hash=parsed_data.get("content_hash"),
-                title=parsed_data.get("title"),
-                meta_description=parsed_data.get("meta_description"),
-                content_type=headers.get("content-type"),
-                content_length=parsed_data.get("content_length", 0),
-                scraping_run_id=run_id,
-                referer_url=referer_url,
-                parent_id=parent_id,
-                last_error=error,
-                retry_count=1 if error else 0,
-            )
-            session.add(page)
-            await session.commit()
-
-        if content and status_code == 200:
-            await file_storage.save_content(
-                content_id=page_id, content=content, parsed_data=parsed_data, url=url
-            )
-
-    async def _scrape_urls_recursive(
-        self,
-        url_entries: List[URLEntry],
-        run_id: str,
-        max_depth: int = 2,
-        current_depth: int = 0,
-        parent_id: Optional[str] = None,
-        referer_url: Optional[str] = None,
-    ) -> None:
-        """Recursively scrape URLs with depth control."""
-        if current_depth >= max_depth:
-            return
-
-        for url_entry in url_entries:
-            url = str(url_entry.url)
-
-            if self._should_skip_url_for_loop_prevention(url, referer_url, current_depth):
-                continue
-
-            # Check if we should skip this domain
-            if self._should_skip_domain(url):
-                continue
-
-            normalized_url = self.url_validator.normalize_url(url)
-            self._global_visited_urls.add(normalized_url)
-
-            # Mark domain as visited on first URL from this domain
-            self._mark_domain_as_visited(url)
-
-            try:
-                child_urls, current_page_id = await self._scrape_single_url_with_children(
-                    url_entry, run_id, current_depth, parent_id, referer_url
-                )
-
-                if child_urls and current_depth + 1 < max_depth:
-                    self.logger.info(
-                        "Processing child URLs",
-                        url=url,
-                        child_count=len(child_urls),
-                        current_depth=current_depth,
-                        max_depth=max_depth,
-                    )
-                    child_entries = [
-                        URLEntry(url=child_url, priority=1, category="discovered")
-                        for child_url in child_urls
-                        if not self._should_skip_url_for_loop_prevention(
-                            child_url, url, current_depth + 1
-                        )
-                        and not self._should_skip_domain(child_url)
-                    ]
-                    filtered_child_count = len(child_entries)
-
-                    self.logger.info(
-                        "Filtered child URLs for recursion",
-                        original_count=len(child_urls),
-                        filtered_count=filtered_child_count,
-                        depth=current_depth + 1,
-                    )
-
-                    if filtered_child_count > 0:
-                        # Use the page_id of the current page as parent_id for children
-                        await self._scrape_urls_recursive(
-                            child_entries, 
-                            run_id, 
-                            max_depth, 
-                            current_depth + 1,
-                            parent_id=current_page_id,
-                            referer_url=url
-                        )
-            except Exception as e:
-                self.logger.debug(f"Mock side effect exhausted or error: {e}")
-                break
-
-    def _should_skip_url_for_loop_prevention(
-        self, url: str, referer_url: Optional[str] = None, depth: int = 0
-    ) -> bool:
-        """Check if URL should be skipped for loop prevention."""
-        if not settings.scraping.enable_loop_prevention:
-            return False
-
-        normalized_url = self.url_validator.normalize_url(url)
-
-        if normalized_url in self._global_visited_urls:
-            return True
-
-        if referer_url and self._is_potential_infinite_loop_pair(url, referer_url):
-            return True
-
         try:
             from urllib.parse import urlparse
 
-            parsed = urlparse(url)
-            path_parts = parsed.path.strip("/").split("/")
-
-            if len(path_parts) > 1:
-                from collections import Counter
-
-                segment_counts = Counter(path_parts)
-                for segment, count in segment_counts.items():
-                    if segment and count > 2:
-                        return True
+            parsed_url = urlparse(url)
+            domain = parsed_url.netloc.lower()
         except Exception:
-            pass
+            domain = "unknown"
 
-        return False
+        page = Page(
+            id=page_id,
+            url=url,
+            scraping_run_id=run_id,
+            parent_id=parent_id,
+            domain=domain,
+            status_code=status_code,
+            depth=depth,
+            referer_url=referer_url,
+            content_hash=parsed_data.get("content_hash"),
+            title=parsed_data.get("title"),
+            meta_description=parsed_data.get("meta_description"),
+            content_type=headers.get("content-type"),
+            content_length=len(content) if content else 0,
+            retry_count=0,
+            last_error=error,
+        )
 
-    def _should_skip_domain(self, url: str) -> bool:
-        """Check if domain should be skipped because it was already scraped in this run."""
-        domain = self.url_validator.extract_domain(url)
-        if domain and domain in self._global_visited_domains:
-            self.logger.debug(
-                "Skipping URL due to domain already scraped in this run",
-                url=url,
-                domain=domain,
-            )
-            return True
-        return False
-
-    def _mark_domain_as_visited(self, url: str) -> None:
-        """Mark domain as visited for this scraping run."""
-        domain = self.url_validator.extract_domain(url)
-        if domain:
-            self._global_visited_domains.add(domain)
-            self.logger.debug("Marked domain as visited", domain=domain)
+        async with db_manager.session() as session:
+            session.add(page)
+            await session.commit()

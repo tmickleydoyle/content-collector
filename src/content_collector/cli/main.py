@@ -130,13 +130,10 @@ def run(
 
         # Choose scraper engine based on performance mode
         if high_performance:
-            from content_collector.core.enhanced_scraper import (
-                HighPerformanceScrapingEngine,
-            )
+            # High-performance mode now uses the main ScrapingEngine
+            from content_collector.core.scraper import ScrapingEngine
 
-            scraper = HighPerformanceScrapingEngine(
-                max_workers=max_workers, debug_links=debug_links
-            )
+            scraper = ScrapingEngine(max_workers=max_workers, debug_links=debug_links)
             console.print(
                 "🚀 Using High-Performance Scraping Engine", style="bold green"
             )
@@ -474,7 +471,7 @@ def turbo(
         get_system_recommendations,
         validate_performance_settings,
     )
-    from content_collector.core.enhanced_scraper import HighPerformanceScrapingEngine
+    from content_collector.core.scraper import ScrapingEngine
     from content_collector.storage.database import db_manager
 
     # Get system recommendations
@@ -537,9 +534,7 @@ def turbo(
         settings.scraping.enable_loop_prevention = enable_loop_prevention
         settings.scraping.allow_cross_domain = allow_cross_domain
 
-        scraper = HighPerformanceScrapingEngine(
-            max_workers=perf_settings["max_workers"]
-        )
+        scraper = ScrapingEngine(max_workers=perf_settings["max_workers"])
 
         try:
             await db_manager.initialize()

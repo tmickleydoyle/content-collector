@@ -1,6 +1,0 @@
-# Test input file containing CSV paths
-# This file lists CSV files containing URLs to scrape
-
-test_data/news_sites.csv
-test_data/tech_blogs.csv
-test_data/educational.csv

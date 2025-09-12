@@ -120,6 +120,7 @@ test_content_collector.db
 *.db
 demo_content/
 demo_reports/
+reports/
 educational_content/
 educational_reports/
 data/content/
