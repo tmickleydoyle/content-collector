@@ -41,10 +41,13 @@ class HighPerformanceScrapingEngine:
 
         # State tracking
         self._global_visited_urls: Set[str] = set()
-        self._global_visited_domains: Set[str] = set()
         self._processing_urls: Set[str] = set()
         self._url_queue: asyncio.Queue = asyncio.Queue()
         self._results_queue: asyncio.Queue = asyncio.Queue()
+
+        # Max pages limit for the entire run
+        self._max_pages_limit: Optional[int] = None
+        self._total_urls_queued: int = 0
 
         # Performance metrics
         self._stats = {
@@ -75,6 +78,10 @@ class HighPerformanceScrapingEngine:
             Run ID for tracking progress
         """
         run_id = str(uuid.uuid4())
+
+        # Set max pages limit for this run
+        self._max_pages_limit = max_pages
+        self._total_urls_queued = 0
 
         self.logger.info(
             "Starting high-performance scraping run",
@@ -156,6 +163,7 @@ class HighPerformanceScrapingEngine:
         """
         # Initialize URL queue with initial URLs
         for url_entry in initial_urls:
+            self._total_urls_queued += 1
             await self._url_queue.put(
                 (url_entry, 0, None)
             )  # (url_entry, depth, parent_id)
@@ -258,8 +266,9 @@ class HighPerformanceScrapingEngine:
         if normalized_url in self._processing_urls:
             return
 
-        # Mark as being processed
+        # Mark as being processed AND visited immediately to prevent duplicates
         self._processing_urls.add(normalized_url)
+        self._global_visited_urls.add(normalized_url)
 
         try:
             start_time = time.time()
@@ -267,17 +276,11 @@ class HighPerformanceScrapingEngine:
             # Check loop prevention
             if self._should_skip_url_for_loop_prevention(url, None, depth):
                 worker_logger.debug("Skipping URL due to loop prevention", url=url)
+                # Remove from visited since we're not actually processing it
+                self._global_visited_urls.discard(normalized_url)
                 return
 
-            # Check if we should skip this domain
-            if self._should_skip_domain(url):
-                return
-
-            # Add to visited URLs
-            self._global_visited_urls.add(normalized_url)
-
-            # Mark domain as visited on first URL from this domain
-            self._mark_domain_as_visited(url)
+            # Note: Removed domain filtering as it was preventing legitimate crawling
 
             # Get fetcher from pool
             fetcher = self._get_next_fetcher()
@@ -320,11 +323,24 @@ class HighPerformanceScrapingEngine:
 
                     child_urls = self._filter_child_urls(parsed_data["links"], url)
 
-                    # Add child URLs to queue for processing
+                    # Add child URLs to queue for processing (with max pages check)
                     for child_url in child_urls:
+                        # Check if we've reached the max pages limit
+                        if (
+                            self._max_pages_limit
+                            and self._total_urls_queued >= self._max_pages_limit
+                        ):
+                            worker_logger.debug(
+                                "Max pages limit reached, not queueing more URLs",
+                                max_pages=self._max_pages_limit,
+                                total_queued=self._total_urls_queued,
+                            )
+                            break
+
                         child_entry = URLEntry(
                             url=child_url, priority=1, category="discovered"
                         )
+                        self._total_urls_queued += 1
                         await self._url_queue.put((child_entry, depth + 1, page_id))
 
                     worker_logger.debug(
@@ -384,9 +400,7 @@ class HighPerformanceScrapingEngine:
                 if not self.url_validator.is_same_domain(parent_url, link):
                     continue
 
-            # Check if domain should be skipped
-            if self._should_skip_domain(link):
-                continue
+            # Note: Domain filtering removed - rely on URL deduplication instead
 
             # Check if already visited or being processed
             normalized_link = self.url_validator.normalize_url(link)
@@ -477,10 +491,8 @@ class HighPerformanceScrapingEngine:
         if not settings.scraping.enable_loop_prevention:
             return False
 
-        # Basic duplicate check
-        normalized_url = self.url_validator.normalize_url(url)
-        if normalized_url in self._global_visited_urls:
-            return True
+        # Note: Don't check _global_visited_urls here as it's already checked in _process_single_url
+        # This function only checks for path-based loops
 
         # Path-based loop detection
         try:
@@ -500,25 +512,6 @@ class HighPerformanceScrapingEngine:
             pass
 
         return False
-
-    def _should_skip_domain(self, url: str) -> bool:
-        """Check if domain should be skipped because it was already scraped in this run."""
-        domain = self.url_validator.extract_domain(url)
-        if domain and domain in self._global_visited_domains:
-            self.logger.debug(
-                "Skipping URL due to domain already scraped in this run",
-                url=url,
-                domain=domain,
-            )
-            return True
-        return False
-
-    def _mark_domain_as_visited(self, url: str) -> None:
-        """Mark domain as visited for this scraping run."""
-        domain = self.url_validator.extract_domain(url)
-        if domain:
-            self._global_visited_domains.add(domain)
-            self.logger.debug("Marked domain as visited", domain=domain)
 
     # Reuse existing helper methods from ScrapingEngine
     async def _prepare_url_entries(
