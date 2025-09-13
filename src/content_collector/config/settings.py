@@ -1,10 +1,9 @@
 """Configuration management for content collector."""
 
-import os
 from pathlib import Path
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 from pydantic_settings import BaseSettings
 
 
@@ -23,7 +22,10 @@ class DatabaseSettings(BaseSettings):
         """Get database URL."""
         if self.url_override:
             return self.url_override
-        return f"postgresql+asyncpg://{self.user}:{self.password}@{self.host}:{self.port}/{self.name}"
+        return (
+            f"postgresql+asyncpg://{self.user}:{self.password}@"
+            f"{self.host}:{self.port}/{self.name}"
+        )
 
 
 class ScrapingSettings(BaseSettings):

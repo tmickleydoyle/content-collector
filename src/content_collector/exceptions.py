@@ -4,31 +4,21 @@
 class ContentCollectorError(Exception):
     """Base exception for all content collector errors."""
 
-    pass
-
 
 class ConfigurationError(ContentCollectorError):
     """Raised when there's a configuration problem."""
-
-    pass
 
 
 class DatabaseError(ContentCollectorError):
     """Raised when there's a database-related error."""
 
-    pass
-
 
 class DatabaseConnectionError(DatabaseError):
     """Raised when database connection fails."""
 
-    pass
-
 
 class DatabaseMigrationError(DatabaseError):
     """Raised when database migration fails."""
-
-    pass
 
 
 class FetchError(ContentCollectorError):
@@ -44,19 +34,13 @@ class FetchError(ContentCollectorError):
 class NetworkError(FetchError):
     """Raised when network request fails."""
 
-    pass
-
 
 class HTTPError(FetchError):
     """Raised when HTTP request returns an error status."""
 
-    pass
-
 
 class TimeoutError(FetchError):
     """Raised when request times out."""
-
-    pass
 
 
 class ParsingError(ContentCollectorError):
@@ -70,8 +54,6 @@ class ParsingError(ContentCollectorError):
 
 class ValidationError(ContentCollectorError):
     """Raised when input validation fails."""
-
-    pass
 
 
 class URLValidationError(ValidationError):
@@ -87,43 +69,29 @@ class URLValidationError(ValidationError):
 class InputProcessingError(ContentCollectorError):
     """Raised when input file processing fails."""
 
-    pass
-
 
 class FileNotFoundError(InputProcessingError):
     """Raised when input file is not found."""
-
-    pass
 
 
 class InvalidInputFormatError(InputProcessingError):
     """Raised when input file format is invalid."""
 
-    pass
-
 
 class StorageError(ContentCollectorError):
     """Raised when file storage operations fail."""
-
-    pass
 
 
 class InsufficientSpaceError(StorageError):
     """Raised when there's insufficient disk space."""
 
-    pass
-
 
 class PermissionError(StorageError):
     """Raised when file permissions are insufficient."""
 
-    pass
-
 
 class ScrapingError(ContentCollectorError):
     """Base class for scraping-related errors."""
-
-    pass
 
 
 class RateLimitError(ScrapingError):

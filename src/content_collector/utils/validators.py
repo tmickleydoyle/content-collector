@@ -1,6 +1,6 @@
 """URL validation and processing utilities."""
 
-from typing import List, Optional
+from typing import Optional
 from urllib.parse import urljoin, urlparse, urlunparse
 
 import structlog
@@ -26,7 +26,15 @@ class URLValidator:
             ".zip",
             ".rar",
             ".tar",
+            ".tar.gz",
+            ".tar.xz",
+            ".tar.bz2",
+            ".tgz",
+            ".txz",
+            ".tbz2",
             ".gz",
+            ".xz",
+            ".bz2",
             ".7z",
             ".mp3",
             ".wav",
@@ -45,6 +53,7 @@ class URLValidator:
             ".dmg",
             ".deb",
             ".rpm",
+            ".pkg",
         }
 
     def is_valid_url(self, url: str) -> bool:
@@ -239,8 +248,14 @@ class URLValidator:
             parsed = urlparse(url)
             path = parsed.path.lower()
 
-            for ext in self.excluded_extensions:
+            # Sort extensions by length (longest first) to match compound extensions first
+            sorted_extensions = sorted(self.excluded_extensions, key=len, reverse=True)
+
+            for ext in sorted_extensions:
                 if path.endswith(ext):
+                    self.logger.debug(
+                        "URL excluded due to extension", url=url, extension=ext
+                    )
                     return True
 
         except Exception:

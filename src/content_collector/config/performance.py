@@ -4,8 +4,6 @@ import multiprocessing
 import os
 from typing import Any, Dict, Optional
 
-from .constants import DEFAULT_MAX_CONCURRENT_REQUESTS
-
 
 class PerformanceConfig:
     """Performance configuration for optimizing concurrency."""

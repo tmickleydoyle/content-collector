@@ -11,7 +11,6 @@ from rich.table import Table
 
 from content_collector.analytics.reporting import report_generator
 from content_collector.core.content_parser import ContentParser
-from content_collector.core.scraper import ScrapingEngine
 from content_collector.input.processor import InputProcessor
 from content_collector.storage.database import db_manager
 
@@ -102,7 +101,7 @@ def run(
     ),
 ):
     """Run the web scraper with the specified parameters."""
-    console.print(f"🕷️  Starting scraping run...", style="bold blue")
+    console.print("🕷️  Starting scraping run...", style="bold blue")
     console.print(f"Input file: {input_file}")
     if max_pages:
         console.print(f"Max pages: {max_pages}")
@@ -494,7 +493,7 @@ def turbo(
         for key, warning in warnings.items():
             console.print(f"   {key}: {warning}")
 
-    console.print(f"🚀 Starting TURBO scraping run...", style="bold green")
+    console.print("🚀 Starting TURBO scraping run...", style="bold green")
     console.print(f"Input file: {input_file}")
     console.print(f"Performance mode: {performance_mode.upper()}")
     console.print(f"Max workers: {perf_settings['max_workers']}")
@@ -553,12 +552,16 @@ def turbo(
             console.print(f"   Total time: {total_time:.2f} seconds")
             console.print(f"   URLs processed: {stats['urls_processed']}")
             console.print(f"   URLs failed: {stats['urls_failed']}")
-            console.print(
-                f"   Success rate: {(stats['urls_processed'] / max(1, stats['urls_processed'] + stats['urls_failed']) * 100):.1f}%"
+            success_rate = (
+                stats["urls_processed"]
+                / max(1, stats["urls_processed"] + stats["urls_failed"])
+                * 100
             )
+            console.print(f"   Success rate: {success_rate:.1f}%")
             if stats["urls_processed"] > 0:
                 console.print(
-                    f"   Average processing time: {stats['total_processing_time'] / stats['urls_processed']:.2f}s per URL"
+                    f"   Average processing time: "
+                    f"{stats['total_processing_time'] / stats['urls_processed']:.2f}s per URL"
                 )
                 console.print(
                     f"   Throughput: {stats['urls_processed'] / max(1, total_time):.1f} URLs/second"
@@ -612,13 +615,13 @@ def intelligence(
             intelligence = result["intelligence"]
 
             # Display content overview
-            console.print(f"\n📄 Content Overview", style="bold green")
+            console.print("\n📄 Content Overview", style="bold green")
             console.print(f"  Title: {result.get('title', 'N/A')}")
             console.print(f"  Content: {len(result.get('body_text', ''))} chars")
             console.print(f"  Links: {result.get('link_count', 0)}")
 
             # Display intelligence analysis
-            console.print(f"\n🧠 Intelligence Analysis", style="bold cyan")
+            console.print("\n🧠 Intelligence Analysis", style="bold cyan")
 
             # Content Quality
             quality = intelligence.get("content_quality", {})
@@ -671,7 +674,7 @@ def intelligence(
             # SEO Analysis
             seo = intelligence.get("seo_analysis", {})
             if seo:
-                console.print(f"\n🔍 SEO Analysis", style="bold magenta")
+                console.print("\n🔍 SEO Analysis", style="bold magenta")
                 console.print(f"  📊 SEO Score: {seo.get('seo_score', 'N/A')}")
                 console.print(
                     f"  📰 Has Meta Description: {seo.get('has_meta_description', False)}"
@@ -683,7 +686,7 @@ def intelligence(
 
             # Show raw data if requested
             if show_raw:
-                console.print(f"\n📊 Raw Analysis Data", style="bold yellow")
+                console.print("\n📊 Raw Analysis Data", style="bold yellow")
                 import json
 
                 console.print(json.dumps(intelligence, indent=2, ensure_ascii=False))
@@ -731,7 +734,7 @@ def intelligence(
                     style="green",
                 )
 
-            console.print(f"\n✅ Intelligence analysis completed!", style="bold green")
+            console.print("\n✅ Intelligence analysis completed!", style="bold green")
 
         except Exception as e:
             console.print(f"❌ Analysis failed: {e}", style="red")
@@ -982,7 +985,9 @@ def benchmark(
                     }
 
                     console.print(
-                        f"  ✓ Time: {parsing_time:.2f}s | Content: {test_result['content_length']} chars | Links: {test_result['links_found']}"
+                        f"  ✓ Time: {parsing_time:.2f}s | Content: "
+                        f"{test_result['content_length']} chars | "
+                        f"Links: {test_result['links_found']}"
                     )
 
                     await parser.close()
@@ -1028,7 +1033,9 @@ def benchmark(
                     }
 
                     console.print(
-                        f"  ✓ Time: {total_time:.2f}s | Features: {test_result['intelligence_features']} | Intelligence: {'Yes' if intelligence_data else 'No'}"
+                        f"  ✓ Time: {total_time:.2f}s | Features: "
+                        f"{test_result['intelligence_features']} | Intelligence: "
+                        f"{'Yes' if intelligence_data else 'No'}"
                     )
 
                     await parser.close()
@@ -1111,7 +1118,7 @@ def benchmark(
         successful_tests = [t for t in results["tests"] if t.get("success")]
         failed_tests = [t for t in results["tests"] if not t.get("success")]
 
-        console.print(f"\n📊 Benchmark Summary", style="bold yellow")
+        console.print("\n📊 Benchmark Summary", style="bold yellow")
         console.print(f"  Total Tests: {len(results['tests'])}")
         console.print(f"  Successful: {len(successful_tests)}")
         console.print(f"  Failed: {len(failed_tests)}")
@@ -1155,7 +1162,7 @@ def benchmark(
                 f"💾 Benchmark results saved: {results_file.absolute()}", style="green"
             )
 
-        console.print(f"\n✅ Benchmark completed!", style="bold green")
+        console.print("\n✅ Benchmark completed!", style="bold green")
 
     asyncio.run(_benchmark())
 
@@ -1192,7 +1199,7 @@ def test_parsing(
                     "https://vercel.com",  # JS-heavy site
                 ]
 
-            console.print(f"Comprehensive parsing enabled (auto-detects content types)")
+            console.print("Comprehensive parsing enabled (auto-detects content types)")
             console.print(f"URLs: {len(test_urls)}")
 
             results = []
@@ -1228,7 +1235,7 @@ def test_parsing(
 
             # Save results
             if save_files or save_db:
-                console.print(f"\n💾 Saving Results...")
+                console.print("\n💾 Saving Results...")
 
                 if save_files:
                     # Create output directory
@@ -1303,7 +1310,7 @@ def test_parsing(
                     finally:
                         await db_manager.close()
 
-            console.print(f"\n✅ Enhanced parsing test completed!", style="green")
+            console.print("\n✅ Enhanced parsing test completed!", style="green")
 
             if results:
                 # Summary table

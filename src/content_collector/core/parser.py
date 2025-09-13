@@ -2,7 +2,6 @@
 
 import hashlib
 from typing import Dict, List, Optional, Set
-from urllib.parse import urljoin, urlparse
 
 import structlog
 from selectolax.parser import HTMLParser

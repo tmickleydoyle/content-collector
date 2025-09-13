@@ -86,12 +86,10 @@ class BaseAsyncComponent(BaseComponent):
     @abstractmethod
     async def _initialize(self) -> None:
         """Component-specific initialization logic."""
-        pass
 
     @abstractmethod
     async def _close(self) -> None:
         """Component-specific cleanup logic."""
-        pass
 
 
 class BaseValidator(BaseComponent):
@@ -104,7 +102,6 @@ class BaseValidator(BaseComponent):
     @abstractmethod
     def validate(self, value: Any) -> bool:
         """Validate a value."""
-        pass
 
     def validate_with_error(self, value: Any, context: str = "") -> None:
         """Validate and raise specific error on failure."""
@@ -143,7 +140,6 @@ class BaseProcessor(BaseComponent):
     @abstractmethod
     async def process(self, data: Any) -> Any:
         """Process data."""
-        pass
 
 
 class BaseFetcher(BaseAsyncComponent):
@@ -234,7 +230,6 @@ class BaseFetcher(BaseAsyncComponent):
     @abstractmethod
     async def _fetch(self, url: str) -> Any:
         """Fetch implementation to be overridden."""
-        pass
 
 
 class BaseStorage(BaseAsyncComponent):
@@ -286,9 +281,7 @@ class BaseStorage(BaseAsyncComponent):
     @abstractmethod
     async def _store(self, key: str, data: Any) -> None:
         """Storage implementation to be overridden."""
-        pass
 
     @abstractmethod
     async def _retrieve(self, key: str) -> Any:
         """Retrieval implementation to be overridden."""
-        pass

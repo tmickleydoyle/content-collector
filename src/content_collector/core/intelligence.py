@@ -1,16 +1,14 @@
 """
-Intelligent content analysis and AI-powered features for world-class web scraping.
+Intelligent content analysis.
 """
 
 import json
 import re
 from collections import Counter
-from datetime import datetime
-from typing import Dict, List, Optional, Set, Tuple
-from urllib.parse import urljoin, urlparse
+from typing import Dict, List
+from urllib.parse import urlparse
 
 import structlog
-from selectolax.parser import HTMLParser
 
 logger = structlog.get_logger()
 
@@ -355,7 +353,7 @@ class ContentIntelligence:
         """Classify the type and purpose of the content."""
         title = parsed_data.get("title", "").lower()
         body_text = parsed_data.get("body_text", "").lower()
-        links = parsed_data.get("links", [])
+        parsed_data.get("links", [])
 
         classification = {
             "content_type": "unknown",

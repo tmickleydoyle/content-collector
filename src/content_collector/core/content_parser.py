@@ -3,15 +3,12 @@ Comprehensive content parser for HTML, JavaScript-rendered pages, PDFs, and imag
 Automatically detects content type and uses the most appropriate parsing method.
 """
 
-import asyncio
 import hashlib
 import io
-import json
 import re
 import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Dict, List, Optional, Set, Union
-from urllib.parse import urljoin
 
 import aiohttp
 import structlog
@@ -71,9 +68,13 @@ except ImportError:
 try:
     from playwright.async_api import async_playwright
 
+    from .playwright_manager import BrowserConfig, PlaywrightManager
+
     PLAYWRIGHT_AVAILABLE = True
 except ImportError:
     async_playwright = None
+    PlaywrightManager = None
+    BrowserConfig = None
     PLAYWRIGHT_AVAILABLE = False
 
 
@@ -95,7 +96,9 @@ class ContentParser:
         self.debug_links = debug_links
         self.debug_info = {"found_links": [], "filtered_links": [], "sources": []}
 
-        # Browser instance for JavaScript rendering
+        # Enhanced Playwright manager for JavaScript rendering
+        self.playwright_manager = None
+        # Legacy browser instance (for backwards compatibility)
         self.browser = None
         self.playwright = None
 
@@ -234,13 +237,96 @@ class ContentParser:
         return self._parse_html_content(html_content, source_url)
 
     async def _parse_with_javascript(self, url: str, source_url: str) -> Dict:
-        """Parse JavaScript-rendered content using browser."""
+        """Parse JavaScript-rendered content using enhanced Playwright manager."""
         if not PLAYWRIGHT_AVAILABLE:
             self.logger.warning(
                 "Playwright not available, falling back to HTML parsing"
             )
             return await self._parse_html(url, source_url)
 
+        # Try enhanced Playwright manager first
+        if PlaywrightManager and BrowserConfig:
+            try:
+                # Initialize Playwright manager if needed
+                if not self.playwright_manager:
+                    config = BrowserConfig(
+                        headless=settings.parsing.js_headless,
+                        timeout=settings.parsing.js_timeout,
+                    )
+                    self.playwright_manager = PlaywrightManager(
+                        config=config,
+                        logger=self.logger,
+                        max_browsers=3,
+                        max_contexts=10,
+                        max_pages_per_context=5,
+                    )
+                    await self.playwright_manager.initialize()
+
+                # Use enhanced render_page method with retry logic
+                render_result = await self.playwright_manager.render_page(
+                    url=url,
+                    max_retries=3,
+                    wait_strategy="networkidle",
+                    wait_for_selectors=[
+                        "[data-reactroot]",
+                        "[ng-app]",
+                        "#app",
+                        ".content-loaded",
+                        "[data-vue-app]",
+                    ],
+                )
+
+                if render_result["success"]:
+                    # Parse the rendered HTML
+                    result = self._parse_html_content(
+                        render_result["content"], source_url
+                    )
+                    result["rendering_method"] = "playwright_enhanced"
+
+                    # Add enhanced metadata
+                    if render_result.get("title"):
+                        result["title"] = render_result["title"]
+
+                    if render_result.get("meta"):
+                        result["meta_tags"] = render_result["meta"]
+
+                    if render_result.get("json_ld"):
+                        result["json_ld"] = render_result["json_ld"]
+
+                    # Merge JavaScript-extracted links
+                    if render_result.get("links"):
+                        existing_links = set(result.get("links", []))
+                        for link in render_result["links"]:
+                            normalized = self._normalize_and_validate_url(
+                                link, source_url
+                            )
+                            if normalized and normalized not in existing_links:
+                                result["links"].append(normalized)
+                                existing_links.add(normalized)
+                        result["link_count"] = len(result["links"])
+
+                    # Add performance metrics
+                    if render_result.get("metrics"):
+                        metrics = render_result["metrics"]
+                        result["render_metrics"] = {
+                            "load_time": metrics.load_time,
+                            "render_time": metrics.render_time,
+                            "total_time": metrics.total_time,
+                            "content_size": metrics.content_size,
+                            "resources_loaded": metrics.resources_loaded,
+                            "retry_count": metrics.retry_count,
+                        }
+
+                    return result
+                else:
+                    self.logger.warning(
+                        f"Enhanced JavaScript rendering failed: {render_result.get('error')}",
+                        url=url,
+                    )
+            except Exception as e:
+                self.logger.error(f"Enhanced Playwright manager failed: {e}", url=url)
+
+        # Fallback to legacy implementation
         try:
             await self._init_browser()
 
@@ -717,6 +803,16 @@ class ContentParser:
 
     async def close(self):
         """Clean up resources."""
+        # Clean up enhanced Playwright manager
+        if self.playwright_manager:
+            # Get and log final metrics before cleanup
+            metrics = self.playwright_manager.get_metrics_summary()
+            self.logger.info(f"Playwright manager final metrics: {metrics}")
+
+            await self.playwright_manager.cleanup()
+            self.playwright_manager = None
+
+        # Clean up legacy browser resources
         if self.browser:
             await self.browser.close()
             self.browser = None

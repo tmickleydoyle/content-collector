@@ -99,9 +99,17 @@ class HighPerformanceFetcher:
             # Browser-like headers to avoid detection and improve compatibility
             headers = {
                 # Use more realistic user agent
-                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "User-Agent": (
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/120.0.0.0 Safari/537.36"
+                ),
                 # More comprehensive accept header
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+                "Accept": (
+                    "text/html,application/xhtml+xml,application/xml;q=0.9,"
+                    "image/webp,image/apng,*/*;q=0.8,"
+                    "application/signed-exchange;v=b3;q=0.7"
+                ),
                 "Accept-Language": "en-US,en;q=0.9",
                 # Remove Brotli encoding to avoid decoding errors
                 "Accept-Encoding": "gzip, deflate",
@@ -115,7 +123,8 @@ class HighPerformanceFetcher:
                 "Connection": "keep-alive",
                 "Upgrade-Insecure-Requests": "1",
                 "Cache-Control": "max-age=0",
-                # Add referer for better site compatibility (will be overridden per request if needed)
+                # Add referer for better site compatibility
+                # (will be overridden per request if needed)
                 "Sec-CH-UA": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
                 "Sec-CH-UA-Mobile": "?0",
                 "Sec-CH-UA-Platform": '"macOS"',
