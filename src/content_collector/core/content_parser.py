@@ -164,7 +164,7 @@ class ContentParser:
             elif content_info["strategy"] == "ocr":
                 result = self._parse_with_ocr(content, source_url, content_info["type"])
             elif content_info["strategy"] == "hybrid_pdf":
-                result = self._parse_hybrid_pdf(content, source_url)
+                result = await self._parse_hybrid_pdf(content, source_url)
             else:  # html
                 result = await self._parse_html(content, source_url)
 
@@ -205,10 +205,14 @@ class ContentParser:
             else:
                 return {"type": "html_bytes", "strategy": "html"}
 
-        # URL analysis
+        # URL analysis (shouldn't get URLs anymore, but keep for backward compatibility)
         if isinstance(content, str) and content.startswith(("http://", "https://")):
+            # This shouldn't happen anymore as fetcher handles downloads
+            # But keep for backward compatibility
+            if content.lower().endswith(".pdf") or "/pdf/" in content.lower():
+                return {"type": "pdf_url", "strategy": "hybrid_pdf"}
             # Check if this domain typically uses heavy JavaScript
-            if any(domain in content for domain in self.js_domains):
+            elif any(domain in content for domain in self.js_domains):
                 return {"type": "url", "strategy": "javascript"}
             return {"type": "url", "strategy": "html"}
 
@@ -395,22 +399,37 @@ class ContentParser:
             self.logger.error(f"OCR parsing failed: {e}")
             return self._empty_result()
 
-    def _parse_hybrid_pdf(
+    async def _parse_hybrid_pdf(
         self, content: Union[bytes, str, Path], source_url: str
     ) -> Dict:
         """Parse PDF using both digital text extraction and OCR."""
         all_text = []
+        pdf_bytes = None
+
+        # Handle different content types
+        if isinstance(content, bytes):
+            pdf_bytes = content
+        elif isinstance(content, Path) or (
+            isinstance(content, str) and not content.startswith(("http://", "https://"))
+        ):
+            # File path
+            path = Path(content) if isinstance(content, str) else content
+            with open(path, "rb") as f:
+                pdf_bytes = f.read()
+        else:
+            # URL string - should not happen anymore as fetcher handles downloads
+            self.logger.error(
+                "PDF URL passed directly to parser. Use fetcher instead.", url=content
+            )
+            return self._empty_result()
 
         # Try digital text extraction first
-        if PDFPLUMBER_AVAILABLE:
+        if PDFPLUMBER_AVAILABLE and pdf_bytes:
             try:
-                if isinstance(content, (str, Path)):
-                    digital_text = self._extract_digital_pdf_text(Path(content))
-                else:
-                    with tempfile.NamedTemporaryFile(suffix=".pdf") as tmp:
-                        tmp.write(content)
-                        tmp.flush()
-                        digital_text = self._extract_digital_pdf_text(Path(tmp.name))
+                with tempfile.NamedTemporaryFile(suffix=".pdf") as tmp:
+                    tmp.write(pdf_bytes)
+                    tmp.flush()
+                    digital_text = self._extract_digital_pdf_text(Path(tmp.name))
 
                 if digital_text:
                     all_text.append(digital_text)
@@ -419,12 +438,9 @@ class ContentParser:
                 self.logger.warning(f"Digital PDF extraction failed: {e}")
 
         # OCR for scanned content if no digital text or as supplement
-        if not all_text and PDF2IMAGE_AVAILABLE and TESSERACT_AVAILABLE:
+        if not all_text and PDF2IMAGE_AVAILABLE and TESSERACT_AVAILABLE and pdf_bytes:
             try:
-                if isinstance(content, (str, Path)):
-                    pages = convert_from_path(str(content))
-                else:
-                    pages = convert_from_bytes(content)
+                pages = convert_from_bytes(pdf_bytes)
 
                 for i, page_image in enumerate(pages):
                     ocr_text = self._ocr_image(page_image)
@@ -581,20 +597,138 @@ class ContentParser:
             return image
 
     def _extract_digital_pdf_text(self, pdf_path: Path) -> Optional[str]:
-        """Extract text from digital PDF."""
+        """Extract text from digital PDF with improved formatting."""
         try:
             all_text = []
             with pdfplumber.open(pdf_path) as pdf:
-                for page in pdf.pages:
-                    text = page.extract_text()
+                for i, page in enumerate(pdf.pages):
+                    # Extract text with layout preservation for better formatting
+                    # layout=True preserves the visual structure of the PDF
+                    text = page.extract_text(layout=True, x_tolerance=3, y_tolerance=3)
                     if text:
-                        all_text.append(text)
+                        # Clean up the text while preserving structure
+                        cleaned_text = self._clean_pdf_text_with_structure(text)
+                        if cleaned_text.strip():
+                            all_text.append(f"--- Page {i+1} ---\n\n{cleaned_text}")
 
             return "\n\n".join(all_text) if all_text else None
 
         except Exception as e:
             self.logger.warning(f"Digital PDF extraction failed: {e}")
             return None
+
+    def _clean_pdf_text(self, text: str) -> str:
+        """Basic PDF text cleaning (kept for backward compatibility)."""
+        import re
+
+        # Remove common PDF artifacts and special characters
+        text = re.sub(r"\(cid:\d+\)", "", text)
+
+        # Fix common ligature issues
+        text = text.replace("ﬁ", "fi").replace("ﬂ", "fl").replace("ﬀ", "ff")
+        text = text.replace("ﬃ", "ffi").replace("ﬄ", "ffl")
+
+        # Clean up excessive whitespace
+        lines = text.split("\n")
+        cleaned_lines = []
+        for line in lines:
+            cleaned_line = " ".join(line.split())
+            if cleaned_line:
+                cleaned_lines.append(cleaned_line)
+
+        return "\n".join(cleaned_lines)
+
+    def _clean_pdf_text_with_structure(self, text: str) -> str:
+        """Clean PDF text while preserving document structure and formatting."""
+        import re
+
+        # Remove common PDF artifacts
+        text = re.sub(r"\(cid:\d+\)", "", text)
+
+        # Fix common ligature issues
+        text = text.replace("ﬁ", "fi").replace("ﬂ", "fl").replace("ﬀ", "ff")
+        text = text.replace("ﬃ", "ffi").replace("ﬄ", "ffl")
+
+        lines = text.split("\n")
+        cleaned_lines = []
+        prev_line_empty = True
+        prev_line_short = False
+
+        for i, line in enumerate(lines):
+            # Remove excessive spaces while preserving intentional spacing
+            stripped = line.strip()
+
+            if not stripped:
+                # Keep empty lines for paragraph breaks, but not too many
+                if not prev_line_empty:
+                    cleaned_lines.append("")
+                    prev_line_empty = True
+                continue
+
+            # Clean up the line while preserving structure
+            # For layout=True, preserve some spacing for alignment
+            if "  " in line:  # Multiple spaces might indicate structure
+                # Preserve relative positioning by normalizing spaces
+                parts = re.split(r"(\s{2,})", line)
+                cleaned_parts = []
+                for part in parts:
+                    if re.match(r"\s{2,}", part):
+                        # Replace multiple spaces with a reasonable separator
+                        cleaned_parts.append("  ")
+                    else:
+                        cleaned_parts.append(part.strip())
+                cleaned_line = "".join(cleaned_parts).strip()
+            else:
+                cleaned_line = stripped
+
+            # Detect potential headers or section breaks
+            is_header = False
+            if len(cleaned_line) < 100:
+                # Check for common header patterns
+                if (
+                    cleaned_line.isupper()  # ALL CAPS
+                    or re.match(r"^\d+\.?\s+[A-Z]", cleaned_line)  # Numbered sections
+                    or re.match(r"^[A-Z][A-Z\s]+$", cleaned_line)  # Title case headers
+                    or re.match(
+                        r"^(Abstract|Introduction|Conclusion|References|Acknowledgment)",
+                        cleaned_line,
+                        re.I,
+                    )
+                ):
+                    is_header = True
+
+            # Add spacing around headers
+            if is_header and not prev_line_empty and cleaned_lines:
+                cleaned_lines.append("")
+
+            cleaned_lines.append(cleaned_line)
+
+            # Add spacing after headers
+            if is_header:
+                prev_line_short = True
+            else:
+                prev_line_short = len(cleaned_line) < 60
+
+            prev_line_empty = False
+
+        # Join lines
+        result = "\n".join(cleaned_lines)
+
+        # Fix spacing around punctuation
+        result = re.sub(r"\s+([.,;!?])", r"\1", result)
+        result = re.sub(r"([.,;!?])(\w)", r"\1 \2", result)
+
+        # Clean up author/email patterns
+        result = re.sub(r"\.\s+(edu|com|org)\.\s+", r".\1.", result)
+        result = re.sub(r"([a-z])\.\s+([a-z]{2,}@)", r"\1.\2", result)
+
+        # Ensure sentences have proper spacing
+        result = re.sub(r"\.([A-Z])", r". \1", result)
+
+        # Remove excessive blank lines (more than 2)
+        result = re.sub(r"\n{3,}", "\n\n", result)
+
+        return result.strip()
 
     # HTML extraction methods (consolidated from original parser.py)
     def _extract_title(self, parser: HTMLParser) -> Optional[str]:
@@ -627,22 +761,84 @@ class ContentParser:
         return headers
 
     def _extract_body_text(self, parser: HTMLParser) -> str:
-        """Extract clean body text."""
+        """Extract clean body text with better formatting preservation."""
         # Remove non-content elements
-        for tag in parser.css("script, style, nav, footer, aside, noscript"):
+        for tag in parser.css("script, style, nav, footer, aside, noscript, iframe"):
             tag.decompose()
 
         # Find main content
         main_content = parser.css_first(
-            "main, article, [role='main'], .content, #content"
+            "main, article, [role='main'], .content, #content, .post-content, .entry-content"
         )
+
         if main_content:
-            text = main_content.text()
+            html = main_content.html
         else:
             body = parser.css_first("body")
-            text = body.text() if body else parser.text()
+            html = body.html if body else parser.html
 
-        return " ".join(text.split())
+        # Extract text with structure preservation from HTML
+        return self._extract_formatted_text_from_html(html)
+
+    def _extract_formatted_text_from_html(self, html: str) -> str:
+        """Extract text from HTML preserving structure."""
+        if not html:
+            return ""
+
+        import re
+
+        # Remove script and style content
+        html = re.sub(
+            r"<script[^>]*>.*?</script>", "", html, flags=re.DOTALL | re.IGNORECASE
+        )
+        html = re.sub(
+            r"<style[^>]*>.*?</style>", "", html, flags=re.DOTALL | re.IGNORECASE
+        )
+        html = re.sub(
+            r"<noscript[^>]*>.*?</noscript>", "", html, flags=re.DOTALL | re.IGNORECASE
+        )
+
+        # Replace block elements with newlines
+        # Headers get double newlines for better spacing
+        html = re.sub(r"<h[1-6][^>]*>", "\n\n", html, flags=re.IGNORECASE)
+        html = re.sub(r"</h[1-6]>", "\n\n", html, flags=re.IGNORECASE)
+
+        # Paragraphs and divs
+        html = re.sub(r"<p[^>]*>", "\n", html, flags=re.IGNORECASE)
+        html = re.sub(r"</p>", "\n", html, flags=re.IGNORECASE)
+        html = re.sub(r"<div[^>]*>", "\n", html, flags=re.IGNORECASE)
+        html = re.sub(r"</div>", "\n", html, flags=re.IGNORECASE)
+
+        # List items
+        html = re.sub(r"<li[^>]*>", "\n• ", html, flags=re.IGNORECASE)
+        html = re.sub(r"</li>", "\n", html, flags=re.IGNORECASE)
+
+        # Line breaks
+        html = re.sub(r"<br[^>]*>", "\n", html, flags=re.IGNORECASE)
+        html = re.sub(r"<hr[^>]*>", "\n---\n", html, flags=re.IGNORECASE)
+
+        # Sections and articles
+        html = re.sub(r"<(section|article)[^>]*>", "\n\n", html, flags=re.IGNORECASE)
+        html = re.sub(r"</(section|article)>", "\n\n", html, flags=re.IGNORECASE)
+
+        # Remove all remaining HTML tags
+        html = re.sub(r"<[^>]+>", " ", html)
+
+        # Decode HTML entities
+        import html as html_module
+
+        text = html_module.unescape(html)
+
+        # Clean up whitespace
+        # Remove excessive spaces within lines
+        text = re.sub(r"[ \t]+", " ", text)
+        # Remove spaces at the beginning and end of lines
+        text = re.sub(r"^ +", "", text, flags=re.MULTILINE)
+        text = re.sub(r" +$", "", text, flags=re.MULTILINE)
+        # Remove excessive blank lines
+        text = re.sub(r"\n{3,}", "\n\n", text)
+
+        return text.strip()
 
     def _extract_links(self, parser: HTMLParser, base_url: str) -> List[str]:
         """Extract and validate all links from HTML."""
@@ -711,13 +907,31 @@ class ContentParser:
 
     def _create_ocr_result(self, text: str, source_url: str, content_type: str) -> Dict:
         """Create OCR result with extracted structure."""
-        # Simple title extraction (first non-empty line)
+        # Improved title extraction for PDFs
         title = None
         lines = text.split("\n")
-        for line in lines:
-            if line.strip():
-                title = line.strip()[:100]
-                break
+
+        if content_type == "pdf":
+            # For PDFs, look for the actual title (usually in first few lines after page marker)
+            for i, line in enumerate(lines[:20]):  # Check first 20 lines
+                line = line.strip()
+                if line and not line.startswith("---") and len(line) > 10:
+                    # Skip copyright/attribution lines
+                    if not any(
+                        word in line.lower()
+                        for word in ["provided", "permission", "copyright", "©", "page"]
+                    ):
+                        # Check if it looks like a title (mixed case, reasonable length)
+                        if len(line) < 150 and not line.startswith("http"):
+                            title = line[:100]
+                            break
+
+        # Fallback to first non-empty line
+        if not title:
+            for line in lines:
+                if line.strip() and not line.startswith("---"):
+                    title = line.strip()[:100]
+                    break
 
         # Extract URLs from text
         urls = re.findall(r'https?://[^\s<>"{}|\\^`\[\]]+', text)

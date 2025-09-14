@@ -16,7 +16,6 @@ class URLValidator:
         self.logger = logger.bind(component="url_validator")
 
         self.excluded_extensions = {
-            ".pdf",
             ".doc",
             ".docx",
             ".xls",

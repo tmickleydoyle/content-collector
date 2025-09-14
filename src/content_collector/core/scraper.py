@@ -4,7 +4,7 @@ import asyncio
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Union
 
 import structlog
 
@@ -525,7 +525,7 @@ class ScrapingEngine:
         return url_entries
 
     async def _parse_content_if_successful(
-        self, status_code: int, content: str, url: str
+        self, status_code: int, content: Union[str, bytes], url: str
     ) -> Dict:
         """Parse content if request was successful."""
         if status_code != 200 or not content:

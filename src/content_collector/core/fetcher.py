@@ -158,7 +158,7 @@ class HighPerformanceFetcher:
             self.session = None
             self.logger.debug("HTTP session closed")
 
-    async def fetch(self, url: str) -> Tuple[int, str, Dict[str, str]]:
+    async def fetch(self, url: str) -> Tuple[int, Union[str, bytes], Dict[str, str]]:
         """
         Fetch content from URL with optimized performance.
 
@@ -167,6 +167,7 @@ class HighPerformanceFetcher:
 
         Returns:
             Tuple of (status_code, content, headers)
+            Content is bytes for PDFs, string for HTML/text
         """
         if not self.session:
             await self.start_session()
@@ -183,9 +184,24 @@ class HighPerformanceFetcher:
             async with self.session.get(
                 url, allow_redirects=True, max_redirects=5, compress=True
             ) as response:
-                # Read content efficiently
-                content = await response.text(encoding="utf-8", errors="ignore")
                 headers = dict(response.headers)
+
+                # Check if this is a PDF based on URL or content-type
+                content_type = headers.get("Content-Type", "").lower()
+                is_pdf = (
+                    url.lower().endswith(".pdf")
+                    or "/pdf/" in url.lower()
+                    or "application/pdf" in content_type
+                )
+
+                # Read content based on type
+                if is_pdf:
+                    # For PDFs, keep as binary
+                    content = await response.read()
+                    self.logger.debug("Fetched PDF content", url=url, size=len(content))
+                else:
+                    # For HTML/text, decode as string
+                    content = await response.text(encoding="utf-8", errors="ignore")
 
                 response_time = time.time() - start_time
 
@@ -198,6 +214,7 @@ class HighPerformanceFetcher:
                     status=response.status,
                     response_time=response_time,
                     content_length=len(content),
+                    content_type="pdf" if is_pdf else "html",
                     domain=domain,
                 )
 
@@ -205,19 +222,31 @@ class HighPerformanceFetcher:
 
         except asyncio.TimeoutError:
             self.logger.warning("Request timeout", url=url, domain=domain)
-            return (408, "", {})
+            return (
+                408,
+                b"" if url.lower().endswith(".pdf") or "/pdf/" in url.lower() else "",
+                {},
+            )
 
         except ClientError as e:
             self.logger.warning("Client error", url=url, domain=domain, error=str(e))
-            return (500, "", {})
+            return (
+                500,
+                b"" if url.lower().endswith(".pdf") or "/pdf/" in url.lower() else "",
+                {},
+            )
 
         except Exception as e:
             self.logger.error("Unexpected error", url=url, domain=domain, error=str(e))
-            return (500, "", {})
+            return (
+                500,
+                b"" if url.lower().endswith(".pdf") or "/pdf/" in url.lower() else "",
+                {},
+            )
 
     async def fetch_batch(
         self, urls: list[str]
-    ) -> list[Tuple[str, int, str, Dict[str, str]]]:
+    ) -> list[Tuple[str, int, Union[str, bytes], Dict[str, str]]]:
         """
         Fetch multiple URLs concurrently with optimized batching.
 
@@ -226,6 +255,7 @@ class HighPerformanceFetcher:
 
         Returns:
             List of tuples (url, status_code, content, headers)
+            Content is bytes for PDFs, string for HTML/text
         """
         if not self.session:
             await self.start_session()
@@ -233,7 +263,9 @@ class HighPerformanceFetcher:
         # Create semaphore for batch concurrency control
         semaphore = asyncio.Semaphore(min(len(urls), self.max_connections_per_host))
 
-        async def fetch_single(url: str) -> Tuple[str, int, str, Dict[str, str]]:
+        async def fetch_single(
+            url: str,
+        ) -> Tuple[str, int, Union[str, bytes], Dict[str, str]]:
             async with semaphore:
                 status_code, content, headers = await self.fetch(url)
                 return (url, status_code, content, headers)

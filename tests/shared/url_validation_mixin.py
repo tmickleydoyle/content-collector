@@ -53,7 +53,6 @@ class URLValidationTestMixin:
     def test_excluded_file_extensions(self, validator):
         """Test that URLs with excluded file extensions are rejected."""
         excluded_urls = [
-            "https://example.com/file.pdf",
             "https://example.com/image.jpg",
             "https://example.com/document.doc",
             "https://example.com/archive.zip",

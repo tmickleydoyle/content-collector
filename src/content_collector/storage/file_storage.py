@@ -2,7 +2,7 @@
 
 import asyncio
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, Union
 
 import structlog
 
@@ -30,14 +30,14 @@ class FileStorage:
         self.logger.info("File storage cleanup completed")
 
     async def save_content(
-        self, content_id: str, content: str, parsed_data: Dict, url: str
+        self, content_id: str, content: Union[str, bytes], parsed_data: Dict, url: str
     ) -> Dict[str, Path]:
         """
         Save scraped content to organized file structure.
 
         Args:
             content_id: Unique identifier for the content
-            content: Raw HTML content
+            content: Raw content (HTML string or PDF bytes)
             parsed_data: Parsed data containing title, headers, body, etc.
             url: Source URL
 
@@ -48,14 +48,40 @@ class FileStorage:
             content_dir = self.base_path / content_id
             content_dir.mkdir(parents=True, exist_ok=True)
 
-            paths = {
-                "raw_html": content_dir / "raw.html",
-                "body": content_dir / "body.txt",
-                "headers": content_dir / "headers.txt",
-                "metadata": content_dir / "metadata.txt",
-            }
+            # Determine file type based on content type
+            is_pdf = (
+                isinstance(content, bytes)
+                or url.lower().endswith(".pdf")
+                or "/pdf/" in url.lower()
+            )
 
-            await self._write_file(paths["raw_html"], content)
+            if is_pdf:
+                paths = {
+                    "raw_pdf": content_dir / "raw.pdf",
+                    "body": content_dir / "body.txt",
+                    "headers": content_dir / "headers.txt",
+                    "metadata": content_dir / "metadata.txt",
+                }
+                # Save PDF as binary
+                if isinstance(content, bytes):
+                    await self._write_binary_file(paths["raw_pdf"], content)
+                else:
+                    # If string passed for PDF, skip raw save
+                    pass
+            else:
+                paths = {
+                    "raw_html": content_dir / "raw.html",
+                    "body": content_dir / "body.txt",
+                    "headers": content_dir / "headers.txt",
+                    "metadata": content_dir / "metadata.txt",
+                }
+                if isinstance(content, str):
+                    await self._write_file(paths["raw_html"], content)
+                else:
+                    # If bytes passed for HTML, decode it
+                    await self._write_file(
+                        paths["raw_html"], content.decode("utf-8", errors="ignore")
+                    )
 
             body_text = parsed_data.get("body_text", "")
             await self._write_file(paths["body"], body_text)
@@ -87,6 +113,11 @@ class FileStorage:
         await loop.run_in_executor(
             None, lambda: file_path.write_text(content, encoding="utf-8")
         )
+
+    async def _write_binary_file(self, file_path: Path, content: bytes) -> None:
+        """Write binary content to file asynchronously."""
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, lambda: file_path.write_bytes(content))
 
     def _format_metadata(self, parsed_data: Dict, url: str) -> str:
         """Format metadata information."""
