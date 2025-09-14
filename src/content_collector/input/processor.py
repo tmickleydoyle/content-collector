@@ -2,13 +2,11 @@
 
 import csv
 from pathlib import Path
-from typing import List, Optional, Set
-from urllib.parse import urlparse
+from typing import List, Set
 
 import structlog
 from pydantic import BaseModel, HttpUrl, field_validator
 
-from content_collector.core.sitemap_parser import SitemapParser
 from content_collector.utils.validators import URLValidator
 
 logger = structlog.get_logger(__name__)
@@ -37,7 +35,6 @@ class InputProcessor:
     def __init__(self):
         self.logger = logger.bind(component="input_processor")
         self.url_validator = URLValidator()
-        self.sitemap_parser = SitemapParser()
 
     async def process_input_file(self, input_file: Path) -> List[URLEntry]:
         """Process input file and return list of URL entries."""
@@ -177,123 +174,5 @@ class InputProcessor:
             if url_str not in seen_urls:
                 seen_urls.add(url_str)
                 unique_urls.append(url_entry)
-
-        return unique_urls
-
-    async def discover_from_sitemap(
-        self, domain: str, max_urls: Optional[int] = None, use_robots: bool = True
-    ) -> List[URLEntry]:
-        """
-        Discover URLs from a domain's sitemap.
-
-        Args:
-            domain: The domain to discover URLs from
-            max_urls: Maximum number of URLs to return
-            use_robots: Whether to check robots.txt for sitemaps
-
-        Returns:
-            List of URL entries discovered from sitemap
-        """
-        self.logger.info(
-            "Discovering URLs from sitemap",
-            domain=domain,
-            max_urls=max_urls,
-            use_robots=use_robots,
-        )
-
-        urls = []
-
-        async with self.sitemap_parser as parser:
-            sitemap_urls = await parser.discover_urls(
-                domain=domain, max_urls=max_urls, use_robots=use_robots
-            )
-
-            # Convert SitemapURL objects to URLEntry objects
-            for sitemap_url in sitemap_urls:
-                try:
-                    # Create description from sitemap metadata
-                    description_parts = []
-                    if sitemap_url.lastmod:
-                        description_parts.append(
-                            f"Modified: {sitemap_url.lastmod.isoformat()}"
-                        )
-                    if sitemap_url.priority is not None:
-                        description_parts.append(f"Priority: {sitemap_url.priority}")
-                    if sitemap_url.changefreq:
-                        description_parts.append(f"Freq: {sitemap_url.changefreq}")
-
-                    description = (
-                        " | ".join(description_parts) if description_parts else ""
-                    )
-
-                    url_entry = URLEntry(
-                        url=str(sitemap_url.loc), description=description
-                    )
-                    urls.append(url_entry)
-
-                except Exception as e:
-                    self.logger.warning(
-                        "Failed to convert sitemap URL",
-                        url=str(sitemap_url.loc),
-                        error=str(e),
-                    )
-
-        self.logger.info(
-            "Sitemap discovery completed", domain=domain, urls_found=len(urls)
-        )
-
-        return urls
-
-    async def process_mixed_input(
-        self, input_file: Path, use_sitemaps: bool = False
-    ) -> List[URLEntry]:
-        """
-        Process input file with optional sitemap discovery for domains.
-
-        Args:
-            input_file: Path to input file (CSV with URLs or domains)
-            use_sitemaps: Whether to discover URLs from sitemaps for domain entries
-
-        Returns:
-            Combined list of URLs from file and sitemaps
-        """
-        # First, process the regular input file
-        file_urls = await self.process_input_file(input_file)
-
-        if not use_sitemaps:
-            return file_urls
-
-        # Extract unique domains from the URLs
-        domains = set()
-        for url_entry in file_urls:
-            parsed = urlparse(str(url_entry.url))
-            domain = f"{parsed.scheme}://{parsed.netloc}"
-            domains.add(domain)
-
-        self.logger.info(
-            "Discovering additional URLs from sitemaps", domains=len(domains)
-        )
-
-        # Discover URLs from sitemaps for each domain
-        sitemap_urls = []
-        for domain in domains:
-            try:
-                domain_urls = await self.discover_from_sitemap(domain)
-                sitemap_urls.extend(domain_urls)
-            except Exception as e:
-                self.logger.warning(
-                    "Failed to discover sitemap URLs", domain=domain, error=str(e)
-                )
-
-        # Combine and deduplicate all URLs
-        all_urls = file_urls + sitemap_urls
-        unique_urls = self._deduplicate_urls(all_urls)
-
-        self.logger.info(
-            "Mixed input processing completed",
-            file_urls=len(file_urls),
-            sitemap_urls=len(sitemap_urls),
-            total_unique=len(unique_urls),
-        )
 
         return unique_urls

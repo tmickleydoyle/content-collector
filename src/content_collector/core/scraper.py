@@ -24,13 +24,27 @@ class ScrapingEngine:
     """High-performance scraping engine with maximum parallelization."""
 
     def __init__(
-        self, max_workers: Optional[int] = None, debug_links: bool = False
+        self,
+        max_workers: Optional[int] = None,
+        max_pages: Optional[int] = None,
+        max_depth: int = 1,
+        max_connections: Optional[int] = None,
+        max_connections_per_host: Optional[int] = None,
+        show_stats: bool = False,
+        debug_links: bool = False,
     ) -> None:
         """Initialize enhanced scraping engine."""
         self.logger = logger.bind(component="hp_scraping_engine")
         self.input_processor = InputProcessor()
         self.content_parser = ContentParser(debug_links=debug_links)
         self.url_validator = URLValidator()
+
+        # Configuration parameters
+        self.max_pages = max_pages
+        self.max_depth = max_depth
+        self.max_connections = max_connections
+        self.max_connections_per_host = max_connections_per_host
+        self.show_stats = show_stats
 
         # Concurrency controls
         self.max_workers = max_workers or (
@@ -45,7 +59,7 @@ class ScrapingEngine:
         self._results_queue: asyncio.Queue = asyncio.Queue()
 
         # Max pages limit for the entire run
-        self._max_pages_limit: Optional[int] = None
+        self._max_pages_limit: Optional[int] = max_pages
         self._total_urls_queued: int = 0
 
         # Performance metrics
@@ -56,6 +70,8 @@ class ScrapingEngine:
             "concurrent_workers": 0,
             "queue_size": 0,
         }
+        self._run_start_time: Optional[float] = None
+        self._run_end_time: Optional[float] = None
 
         # Multiple HTTP fetchers for better connection pooling
         self._fetcher_pool_size = min(5, max(1, self.max_workers // 10))
@@ -63,7 +79,10 @@ class ScrapingEngine:
         self._fetcher_index = 0
 
     async def run(
-        self, input_file: Path, max_pages: Optional[int] = None, max_depth: int = 2
+        self,
+        input_file: Path,
+        max_pages: Optional[int] = None,
+        max_depth: Optional[int] = None,
     ) -> str:
         """
         Run high-performance scraping workflow.
@@ -76,30 +95,41 @@ class ScrapingEngine:
         Returns:
             Run ID for tracking progress
         """
+        # Initialize database if not already initialized
+        await db_manager.initialize()
+
         run_id = str(uuid.uuid4())
 
+        # Use instance variables if parameters not provided
+        effective_max_pages = max_pages if max_pages is not None else self.max_pages
+        effective_max_depth = max_depth if max_depth is not None else self.max_depth
+
         # Set max pages limit for this run
-        self._max_pages_limit = max_pages
+        self._max_pages_limit = effective_max_pages
         self._total_urls_queued = 0
 
         self.logger.info(
             "Starting high-performance scraping run",
             run_id=run_id,
             input_file=str(input_file),
-            max_pages=max_pages,
-            max_depth=max_depth,
+            max_pages=effective_max_pages,
+            max_depth=effective_max_depth,
             max_workers=self.max_workers,
             fetcher_pool_size=self._fetcher_pool_size,
         )
 
-        await self._create_scraping_run_record(run_id, str(input_file), max_depth)
+        await self._create_scraping_run_record(
+            run_id, str(input_file), effective_max_depth
+        )
 
         try:
             # Initialize fetcher pool
             await self._initialize_fetcher_pool()
 
             # Prepare initial URLs
-            url_entries = await self._prepare_url_entries(input_file, max_pages)
+            url_entries = await self._prepare_url_entries(
+                input_file, effective_max_pages
+            )
 
             if not url_entries:
                 self.logger.warning("No URLs found in input file")
@@ -107,8 +137,16 @@ class ScrapingEngine:
 
             await self._update_total_urls_count(run_id, len(url_entries))
 
+            # Start timing the actual scraping work
+            self._run_start_time = time.time()
+
             # Start parallel processing
-            await self._parallel_scrape_with_depth(url_entries, run_id, max_depth)
+            await self._parallel_scrape_with_depth(
+                url_entries, run_id, effective_max_depth
+            )
+
+            # End timing
+            self._run_end_time = time.time()
 
             await self._mark_run_completed(run_id)
 
@@ -279,8 +317,6 @@ class ScrapingEngine:
                 self._global_visited_urls.discard(normalized_url)
                 return
 
-            # Note: Removed domain filtering as it was preventing legitimate crawling
-
             # Get fetcher from pool
             fetcher = self._get_next_fetcher()
 
@@ -399,8 +435,6 @@ class ScrapingEngine:
                 if not self.url_validator.is_same_domain(parent_url, link):
                     continue
 
-            # Note: Domain filtering removed - rely on URL deduplication instead
-
             # Check if already visited or being processed
             normalized_link = self.url_validator.normalize_url(link)
             if (
@@ -411,7 +445,7 @@ class ScrapingEngine:
 
         return filtered_urls
 
-    async def _result_processor(self, run_id: str) -> None:
+    async def _result_processor(self, _run_id: str) -> None:
         """Process results from the results queue."""
         try:
             while True:
@@ -484,7 +518,7 @@ class ScrapingEngine:
             raise
 
     def _should_skip_url_for_loop_prevention(
-        self, url: str, referer_url: Optional[str] = None, depth: int = 0
+        self, url: str, _referer_url: Optional[str] = None, _depth: int = 0
     ) -> bool:
         """Check if URL should be skipped for loop prevention."""
         if not settings.scraping.enable_loop_prevention:
@@ -626,3 +660,42 @@ class ScrapingEngine:
         async with db_manager.session() as session:
             session.add(page)
             await session.commit()
+
+    def get_final_stats(self) -> Dict[str, Any]:
+        """Get final performance statistics."""
+        total_processed = self._stats["urls_processed"] + self._stats["urls_failed"]
+        success_rate = (
+            (self._stats["urls_processed"] / total_processed * 100)
+            if total_processed > 0
+            else 0
+        )
+
+        # Calculate wall-clock time (actual time from start to finish)
+        wall_clock_time = (
+            self._run_end_time - self._run_start_time
+            if self._run_start_time and self._run_end_time
+            else 0
+        )
+
+        # Average processing time per URL (individual processing time)
+        avg_processing_time = (
+            self._stats["total_processing_time"] / self._stats["urls_processed"]
+            if self._stats["urls_processed"] > 0
+            else 0
+        )
+
+        # Throughput based on wall-clock time
+        throughput = (
+            self._stats["urls_processed"] / wall_clock_time
+            if wall_clock_time > 0
+            else 0
+        )
+
+        return {
+            "urls_processed": self._stats["urls_processed"],
+            "urls_failed": self._stats["urls_failed"],
+            "success_rate": success_rate,
+            "total_time": wall_clock_time,
+            "avg_processing_time": avg_processing_time,
+            "throughput": throughput,
+        }

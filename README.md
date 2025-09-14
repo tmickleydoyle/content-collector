@@ -6,7 +6,7 @@ A high-performance web scraping framework with intelligent content processing an
 
 - **Content Processing**: Handles HTML, JavaScript, PDFs, and images automatically
 - **High Performance**: Concurrent scraping with configurable worker pools
-- **Sitemap Discovery**: Automatically finds and processes XML sitemaps
+- **Content Intelligence**: Automatic content type detection and optimal parsing
 - **Recursive Crawling**: Follows links with depth and domain controls
 - **Data Storage**: PostgreSQL/SQLite with structured file output
 - **Analytics**: Built-in reporting and performance monitoring
@@ -20,10 +20,7 @@ pip install -r requirements.txt
 # Initialize database
 python -m content_collector init
 
-# Basic scraping
-python -m content_collector run urls.csv
-
-# High-performance mode
+# High-performance scraping with automatic content processing
 python -m content_collector turbo urls.csv --performance aggressive
 ```
 
@@ -39,30 +36,21 @@ https://docs.python.org,Documentation
 ## Commands
 
 ```bash
-# Basic commands
-python -m content_collector run urls.csv          # Standard scraping
-python -m content_collector turbo urls.csv        # High-performance mode
+# Core commands
+python -m content_collector turbo urls.csv        # High-performance scraping
 python -m content_collector status                # Check run status
 python -m content_collector report --run-id ID    # Generate reports
 
-# Content analysis
-python -m content_collector intelligence URL      # Analyze single page
-python -m content_collector sitemap DOMAIN        # Discover URLs from sitemap
+# Testing and diagnostics
 python -m content_collector test-parsing          # Test parsing capabilities
+python -m content_collector benchmark             # Run performance benchmarks
 ```
 
-## Options
+## Turbo Command Options
 
-**Run command options:**
 - `--max-pages N` - Limit total pages scraped
 - `--depth N` - Maximum crawl depth (default: 1)
-- `--allow-cross-domain` - Enable cross-domain crawling
-- `--high-performance` - Use high-performance engine
-- `--max-workers N` - Concurrent workers (high-performance mode)
-
-**Turbo command options:**
-- `--max-pages N` - Limit total pages scraped
-- `--depth N` - Maximum crawl depth (default: 2)
 - `--performance MODE` - Performance mode: conservative, balanced, aggressive, maximum (default: balanced)
+- `--max-workers N` - Override number of concurrent workers
 - `--allow-cross-domain` - Enable cross-domain crawling
-- `--show-stats` - Display real-time statistics (default: enabled)
+- `--show-stats` - Display real-time performance statistics

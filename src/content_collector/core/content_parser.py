@@ -17,14 +17,6 @@ from selectolax.parser import HTMLParser
 from ..config.settings import settings
 from ..utils.validators import URLValidator
 
-# Import intelligence system for advanced analysis
-try:
-    from .intelligence import ContentIntelligence
-
-    INTELLIGENCE_AVAILABLE = True
-except ImportError:
-    INTELLIGENCE_AVAILABLE = False
-
 logger = structlog.get_logger()
 
 # Optional imports with graceful fallback
@@ -41,7 +33,7 @@ except ImportError:
     TESSERACT_AVAILABLE = False
 
 try:
-    from pdf2image import convert_from_bytes, convert_from_path
+    from pdf2image import convert_from_bytes
 
     PDF2IMAGE_AVAILABLE = True
 except ImportError:
@@ -87,9 +79,7 @@ class ContentParser:
     - Various document formats
     """
 
-    def __init__(
-        self, debug_links: bool = False, enable_intelligence: bool = True
-    ) -> None:
+    def __init__(self, debug_links: bool = False) -> None:
         """Initialize comprehensive content parser."""
         self.logger = logger.bind(component="content_parser")
         self.url_validator = URLValidator()
@@ -102,12 +92,7 @@ class ContentParser:
         self.browser = None
         self.playwright = None
 
-        # AI-powered content intelligence
-        self.enable_intelligence = enable_intelligence and INTELLIGENCE_AVAILABLE
-        if self.enable_intelligence:
-            self.intelligence = ContentIntelligence()
-        else:
-            self.intelligence = None
+        # Basic content analysis only
 
         # JavaScript-heavy domains that should use browser rendering
         self.js_domains = {
@@ -168,10 +153,7 @@ class ContentParser:
             else:  # html
                 result = await self._parse_html(content, source_url)
 
-            # Add intelligent analysis if enabled
-            if self.enable_intelligence and result.get("body_text"):
-                intelligence_result = self.intelligence.analyze_content(result)
-                result["intelligence"] = intelligence_result
+            # Basic content analysis complete
 
             return result
 
@@ -193,7 +175,7 @@ class ContentParser:
                         return {"type": "image_file", "strategy": "ocr"}
                     elif suffix in [".html", ".htm"]:
                         return {"type": "html_file", "strategy": "html"}
-            except:
+            except Exception:
                 pass
 
         # Bytes analysis
@@ -445,7 +427,7 @@ class ContentParser:
                 for i, page_image in enumerate(pages):
                     ocr_text = self._ocr_image(page_image)
                     if ocr_text:
-                        all_text.append(f"--- Page {i+1} ---\n{ocr_text}")
+                        all_text.append(f"--- Page {i + 1} ---\n{ocr_text}")
 
                 if pages:
                     self.logger.info(f"OCR completed for {len(pages)} pages")
@@ -517,7 +499,7 @@ class ContentParser:
                 try:
                     await page.wait_for_selector(selector, timeout=2000)
                     break
-                except:
+                except Exception:
                     continue
 
         except Exception:
@@ -609,7 +591,7 @@ class ContentParser:
                         # Clean up the text while preserving structure
                         cleaned_text = self._clean_pdf_text_with_structure(text)
                         if cleaned_text.strip():
-                            all_text.append(f"--- Page {i+1} ---\n\n{cleaned_text}")
+                            all_text.append(f"--- Page {i + 1} ---\n\n{cleaned_text}")
 
             return "\n\n".join(all_text) if all_text else None
 
@@ -652,9 +634,8 @@ class ContentParser:
         lines = text.split("\n")
         cleaned_lines = []
         prev_line_empty = True
-        prev_line_short = False
 
-        for i, line in enumerate(lines):
+        for line in lines:
             # Remove excessive spaces while preserving intentional spacing
             stripped = line.strip()
 
@@ -705,9 +686,7 @@ class ContentParser:
 
             # Add spacing after headers
             if is_header:
-                prev_line_short = True
-            else:
-                prev_line_short = len(cleaned_line) < 60
+                pass  # Header processed
 
             prev_line_empty = False
 
@@ -913,7 +892,7 @@ class ContentParser:
 
         if content_type == "pdf":
             # For PDFs, look for the actual title (usually in first few lines after page marker)
-            for i, line in enumerate(lines[:20]):  # Check first 20 lines
+            for line in lines[:20]:  # Check first 20 lines
                 line = line.strip()
                 if line and not line.startswith("---") and len(line) > 10:
                     # Skip copyright/attribution lines
@@ -1037,11 +1016,9 @@ class ContentParser:
 
 
 # Legacy function for backward compatibility
-async def parse_content(
-    content: Union[str, bytes, Path], source_url: str, enable_intelligence: bool = True
-) -> Dict:
-    """Parse content using comprehensive parser with optional intelligence analysis."""
-    parser = ContentParser(enable_intelligence=enable_intelligence)
+async def parse_content(content: Union[str, bytes, Path], source_url: str) -> Dict:
+    """Parse content using comprehensive parser."""
+    parser = ContentParser()
     try:
         return await parser.parse(content, source_url)
     finally:
