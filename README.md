@@ -57,7 +57,7 @@ python -m content_collector benchmark             # Run performance benchmarks
 
 ----
 
-## Example
+## Output Example from Branch Walking Script
 
 # Content Scraping Branch Report
 
