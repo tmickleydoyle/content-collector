@@ -2,7 +2,7 @@
 
 import asyncio
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 import structlog
 import typer
@@ -152,9 +152,7 @@ def report(
     async def _report():
         try:
             await db_manager.initialize()
-            report_data = await report_generator.generate_run_report(
-                run_id, detailed=detailed
-            )
+            report_data = await report_generator.generate_run_report(run_id)
 
             if output_format == "json":
                 import json
@@ -193,9 +191,45 @@ def report(
                     console.print(csv_content)
 
             else:  # table format
-                await report_generator.print_run_report(
-                    run_id, console, detailed=detailed
+                # Print the report in table format
+                from rich.table import Table
+
+                # Create summary table
+                table = Table(title=f"Scraping Report - Run ID: {run_id[:8]}...")
+                table.add_column("Metric", style="cyan")
+                table.add_column("Value", style="green")
+
+                # Add run info
+                run_info = report_data.get("run_info", {})
+                table.add_row("Status", run_info.get("status", "N/A"))
+                table.add_row("Input File", run_info.get("input_file", "N/A"))
+                table.add_row("Max Depth", str(run_info.get("max_depth", "N/A")))
+
+                # Add summary
+                summary = report_data.get("summary", {})
+                table.add_row("Total Pages", str(summary.get("total_pages", 0)))
+                table.add_row("Success", str(summary.get("success_count", 0)))
+                table.add_row("Failures", str(summary.get("failure_count", 0)))
+                table.add_row("Success Rate", f"{summary.get('success_rate', 0):.1f}%")
+                table.add_row(
+                    "Total Bytes", f"{summary.get('total_content_bytes', 0):,}"
                 )
+
+                console.print(table)
+
+                # Print domain distribution
+                domains = report_data.get("domains", {})
+                if domains.get("distribution"):
+                    console.print("\n[bold cyan]Domain Distribution:[/bold cyan]")
+                    for domain, count in list(domains["distribution"].items())[:5]:
+                        console.print(f"  • {domain}: {count} pages")
+
+                # Print status codes
+                status_codes = report_data.get("status_codes", {})
+                if status_codes:
+                    console.print("\n[bold cyan]Status Codes:[/bold cyan]")
+                    for code, count in sorted(status_codes.items()):
+                        console.print(f"  • {code}: {count} pages")
 
             if save_file and output_format == "table":
                 console.print(
@@ -268,6 +302,11 @@ def turbo(
     show_stats: bool = typer.Option(
         False, "--show-stats", help="Display real-time performance statistics"
     ),
+    exclude_patterns: Optional[List[str]] = typer.Option(
+        None,
+        "--exclude",
+        help="Regex patterns to exclude URLs (can be used multiple times)",
+    ),
 ):
     """High-performance web scraping with intelligent content processing."""
     import psutil
@@ -311,6 +350,9 @@ def turbo(
     )
     console.print(f"Real-time stats: {'enabled' if show_stats else 'disabled'}")
 
+    if exclude_patterns:
+        console.print(f"Exclude patterns: {', '.join(exclude_patterns)}")
+
     async def _turbo_run():
         from content_collector.config.settings import settings
         from content_collector.core.scraper import (
@@ -329,6 +371,7 @@ def turbo(
                 max_connections=max_connections,
                 max_connections_per_host=max_connections_per_host,
                 show_stats=show_stats,
+                exclude_patterns=exclude_patterns,
             )
 
             run_id = await engine.run(input_file, max_pages=max_pages, max_depth=depth)

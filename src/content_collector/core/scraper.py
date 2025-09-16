@@ -32,12 +32,13 @@ class ScrapingEngine:
         max_connections_per_host: Optional[int] = None,
         show_stats: bool = False,
         debug_links: bool = False,
+        exclude_patterns: Optional[List[str]] = None,
     ) -> None:
         """Initialize enhanced scraping engine."""
         self.logger = logger.bind(component="hp_scraping_engine")
         self.input_processor = InputProcessor()
         self.content_parser = ContentParser(debug_links=debug_links)
-        self.url_validator = URLValidator()
+        self.url_validator = URLValidator(exclude_patterns=exclude_patterns)
 
         # Configuration parameters
         self.max_pages = max_pages

@@ -1,6 +1,7 @@
 """URL validation and processing utilities."""
 
-from typing import Optional
+import re
+from typing import List, Optional
 from urllib.parse import urljoin, urlparse, urlunparse
 
 import structlog
@@ -11,9 +12,24 @@ logger = structlog.get_logger()
 class URLValidator:
     """Validates and normalizes URLs."""
 
-    def __init__(self) -> None:
-        """Initialize URL validator."""
+    def __init__(self, exclude_patterns: Optional[List[str]] = None) -> None:
+        """Initialize URL validator.
+
+        Args:
+            exclude_patterns: List of regex patterns to exclude URLs
+        """
         self.logger = logger.bind(component="url_validator")
+
+        # Compile exclude patterns for better performance
+        self.exclude_patterns = []
+        if exclude_patterns:
+            for pattern in exclude_patterns:
+                try:
+                    compiled_pattern = re.compile(pattern, re.IGNORECASE)
+                    self.exclude_patterns.append((pattern, compiled_pattern))
+                    self.logger.info(f"Added exclude pattern: {pattern}")
+                except re.error as e:
+                    self.logger.error(f"Invalid regex pattern '{pattern}': {e}")
 
         self.excluded_extensions = {
             ".doc",
@@ -90,6 +106,9 @@ class URLValidator:
                 return False
 
             if self._is_non_html_resource(url):
+                return False
+
+            if self._matches_exclude_pattern(url):
                 return False
 
             return True
@@ -239,6 +258,21 @@ class URLValidator:
             except ValueError:
                 pass
 
+        return False
+
+    def _matches_exclude_pattern(self, url: str) -> bool:
+        """Check if URL matches any exclude pattern."""
+        for pattern_str, compiled_pattern in self.exclude_patterns:
+            try:
+                if compiled_pattern.search(url):
+                    self.logger.debug(
+                        "URL excluded by pattern", url=url, pattern=pattern_str
+                    )
+                    return True
+            except Exception as e:
+                self.logger.error(
+                    f"Error matching pattern '{pattern_str}' against URL '{url}': {e}"
+                )
         return False
 
     def _has_excluded_extension(self, url: str) -> bool:
